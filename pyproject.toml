@@ -1,0 +1,36 @@
+[project]
+name = "rleditor"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+dependencies = [
+    "gymnasium>=1.2.3",
+    "ipykernel>=7.2.0",
+    "matplotlib>=3.10.8",
+    "networkx>=3.6.1",
+    "pyside6>=6.10.0",
+    "pydot>=4.0.1",
+    "pygame>=2.6.1",
+    "setuptools>=82.0.1",
+    "stable-baselines3>=2.7.1",
+    "tensorboard>=2.20.0",
+    "tensorflow>=2.21.0",
+]
+
+[project.scripts]
+rleditor = "rleditor.main:main"
+
+[build-system]
+requires = ["setuptools>=82.0.1", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+]
