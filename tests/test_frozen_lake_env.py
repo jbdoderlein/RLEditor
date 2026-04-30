@@ -9,7 +9,11 @@ from PySide6.QtWidgets import QApplication, QLayout, QSizePolicy
 
 from rleditor.core.models import EpisodeMoment, EpisodeStep, EpisodeTrace, TaskDefinition, TaskSnapshot
 from rleditor.plugins.builtin.frozen_lake import FrozenLakeBackend, FrozenLakeTaskEditorWidget
-from rleditor.plugins.builtin.frozen_lake_env import FrozenLakeEnvState, FrozenLakeExtendedEnv
+from rleditor.plugins.builtin.frozen_lake_env import (
+    FrozenLakeEnvState,
+    FrozenLakeExtendedEnv,
+    TILE_START,
+)
 
 
 def _app() -> QApplication:
@@ -79,6 +83,24 @@ def test_frozen_lake_extended_env_honors_start_state_override() -> None:
         assert int(observation) == 6
         assert info["start_state_override"] == 6
         assert env.export_state().state_index == 6
+    finally:
+        env.close()
+
+
+def test_frozen_lake_extended_env_starts_on_map_start_tile() -> None:
+    task = _task_definition()
+    task.config["map_desc"] = [
+        "FFFF",
+        "FSFF",
+        "FFFF",
+        "FFFG",
+    ]
+
+    env = FrozenLakeExtendedEnv(task)
+    try:
+        observation, _info = env.reset(seed=9)
+        assert int(observation) == 5
+        assert env.export_state().state_index == 5
     finally:
         env.close()
 
@@ -201,6 +223,33 @@ def test_frozen_lake_task_editor_accepts_custom_grid_size() -> None:
     assert len(widget._task.config["map_desc"]) == 5
     assert widget.start_state_spin.maximum() == 24
     assert changed_tasks
+
+
+def test_frozen_lake_task_editor_moving_start_clears_start_override() -> None:
+    _app()
+    task = _task_definition()
+    task.config["start_state"] = 0
+    changed_tasks: list[TaskDefinition] = []
+    widget = FrozenLakeTaskEditorWidget(task, changed_tasks.append)
+
+    widget.paint_combo.setCurrentIndex(widget.paint_combo.findData(TILE_START))
+    widget._paint_cell(1, 1)
+
+    assert widget._task.config["map_desc"] == [
+        "FFFF",
+        "FSFH",
+        "FFFH",
+        "HFFG",
+    ]
+    assert "start_state" not in widget._task.config
+    assert not widget.start_override_checkbox.isChecked()
+
+    env = FrozenLakeExtendedEnv(task)
+    try:
+        observation, _info = env.reset(seed=9)
+        assert int(observation) == 5
+    finally:
+        env.close()
 
 
 def test_frozen_lake_task_editor_updates_success_rate() -> None:

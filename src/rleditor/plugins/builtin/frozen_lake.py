@@ -566,6 +566,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
             _generate_random_map_desc(size, hole_probability),
             expected_size=size,
         )
+        self._clear_start_override()
         self._rebuild_grid()
         self._emit_task_change()
 
@@ -576,6 +577,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
             _generate_random_map_desc(size, hole_probability),
             expected_size=size,
         )
+        self._clear_start_override()
         self._rebuild_grid()
         self._emit_task_change()
 
@@ -584,6 +586,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         self._map = [[TILE_FROZEN for _ in range(size)] for _ in range(size)]
         self._map[0][0] = TILE_START
         self._map[-1][-1] = TILE_GOAL
+        self._clear_start_override()
         self._rebuild_grid()
         self._emit_task_change()
 
@@ -628,6 +631,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
 
         if target == TILE_START:
             self._replace_unique_tile(TILE_START, row, col)
+            self._clear_start_override()
         elif target == TILE_GOAL:
             self._replace_unique_tile(TILE_GOAL, row, col)
         else:
@@ -671,6 +675,16 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         self.start_state_spin.blockSignals(True)
         self.start_state_spin.setEnabled(has_override)
         self.start_state_spin.setValue(min(max(0, start_state or 0), max_state))
+        self.start_state_spin.blockSignals(False)
+
+    def _clear_start_override(self) -> None:
+        self._task.config.pop("start_state", None)
+        self.start_override_checkbox.blockSignals(True)
+        self.start_override_checkbox.setChecked(False)
+        self.start_override_checkbox.blockSignals(False)
+        self.start_state_spin.blockSignals(True)
+        self.start_state_spin.setEnabled(False)
+        self.start_state_spin.setValue(0)
         self.start_state_spin.blockSignals(False)
 
     def _sync_success_rate_controls(self) -> None:
