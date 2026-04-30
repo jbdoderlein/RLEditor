@@ -157,3 +157,18 @@ def test_frozen_lake_task_editor_grid_uses_fixed_spacing() -> None:
     assert widget.grid_layout.sizeConstraint() == QLayout.SizeConstraint.SetFixedSize
     assert widget.grid_host.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Fixed
     assert widget.grid_host.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
+
+
+def test_frozen_lake_task_editor_accepts_custom_grid_size() -> None:
+    _app()
+    changed_tasks: list[TaskDefinition] = []
+    widget = FrozenLakeTaskEditorWidget(_task_definition(), changed_tasks.append)
+
+    widget.size_spin.setValue(5)
+
+    assert len(widget._map) == 5
+    assert all(len(row) == 5 for row in widget._map)
+    assert widget._task.config["size"] == 5
+    assert len(widget._task.config["map_desc"]) == 5
+    assert widget.start_state_spin.maximum() == 24
+    assert changed_tasks

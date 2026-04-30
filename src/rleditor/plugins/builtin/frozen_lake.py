@@ -409,18 +409,17 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         controls = QGroupBox("Map Setup", self)
         controls_layout = QFormLayout(controls)
 
-        self.size_combo = QComboBox(controls)
-        self.size_combo.addItems(["4", "6", "8"])
-        current_size = str(len(self._map))
-        if self.size_combo.findText(current_size) < 0:
-            self.size_combo.addItem(current_size)
-        self.size_combo.setCurrentText(current_size)
+        self.size_spin = QSpinBox(controls)
+        self.size_spin.setRange(2, 64)
+        self.size_spin.setAccelerated(True)
+        self.size_spin.setValue(len(self._map))
+        self.size_spin.setToolTip("Custom square grid size. Large grids can become hard to edit visually.")
 
         self.slippery_checkbox = QCheckBox("Enable slippery dynamics", controls)
         self.slippery_checkbox.setChecked(bool(self._task.config.get("is_slippery", True)))
 
         self.hole_probability = QDoubleSpinBox(controls)
-        self.hole_probability.setRange(0.05, 0.70)
+        self.hole_probability.setRange(0, 1)
         self.hole_probability.setSingleStep(0.05)
         self.hole_probability.setDecimals(2)
         self.hole_probability.setValue(float(self._task.config.get("hole_probability", 0.22)))
@@ -428,7 +427,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         self.regenerate_button = QPushButton("Regenerate Random Map", controls)
         self.regenerate_button.clicked.connect(self._regenerate_random_map)
 
-        controls_layout.addRow("Grid size", self.size_combo)
+        controls_layout.addRow("Grid size", self.size_spin)
         controls_layout.addRow("Dynamics", self.slippery_checkbox)
         controls_layout.addRow("Hole probability", self.hole_probability)
         controls_layout.addRow("", self.regenerate_button)
@@ -506,7 +505,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         root.addWidget(reward_group)
         root.addWidget(self.grid_host, 0, Qt.AlignmentFlag.AlignLeft)
 
-        self.size_combo.currentTextChanged.connect(lambda _text: self._on_size_changed())
+        self.size_spin.valueChanged.connect(lambda _value: self._on_size_changed())
         self.slippery_checkbox.stateChanged.connect(lambda _state: self._emit_task_change())
         self.hole_probability.valueChanged.connect(lambda _value: self._emit_task_change())
         self.start_override_checkbox.stateChanged.connect(lambda _state: self._on_start_override_changed())
@@ -542,7 +541,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
                 self._task.config["start_state"] = start_state
 
     def _on_size_changed(self) -> None:
-        size = int(self.size_combo.currentText())
+        size = self._selected_grid_size()
         hole_probability = float(self.hole_probability.value())
         self._map = _normalize_map_desc(
             _generate_random_map_desc(size, hole_probability),
@@ -552,7 +551,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         self._emit_task_change()
 
     def _regenerate_random_map(self) -> None:
-        size = int(self.size_combo.currentText())
+        size = self._selected_grid_size()
         hole_probability = float(self.hole_probability.value())
         self._map = _normalize_map_desc(
             _generate_random_map_desc(size, hole_probability),
@@ -562,12 +561,15 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         self._emit_task_change()
 
     def _reset_to_empty(self) -> None:
-        size = int(self.size_combo.currentText())
+        size = self._selected_grid_size()
         self._map = [[TILE_FROZEN for _ in range(size)] for _ in range(size)]
         self._map[0][0] = TILE_START
         self._map[-1][-1] = TILE_GOAL
         self._rebuild_grid()
         self._emit_task_change()
+
+    def _selected_grid_size(self) -> int:
+        return int(self.size_spin.value())
 
     def _rebuild_grid(self) -> None:
         self._sync_start_override_controls()
