@@ -13,6 +13,7 @@ from rleditor.plugins.builtin.frozen_lake_env import (
     FrozenLakeEnvState,
     FrozenLakeExtendedEnv,
     TILE_START,
+    _generate_random_map_desc,
 )
 
 
@@ -103,6 +104,17 @@ def test_frozen_lake_extended_env_starts_on_map_start_tile() -> None:
         assert env.export_state().state_index == 5
     finally:
         env.close()
+
+
+def test_frozen_lake_random_map_hole_probability_zero_has_no_holes() -> None:
+    map_desc = _generate_random_map_desc(size=8, hole_probability=0.0)
+
+    assert all("H" not in row for row in map_desc)
+
+
+def test_frozen_lake_random_map_rejects_impossible_hole_probability() -> None:
+    with pytest.raises(ValueError, match="hole_probability"):
+        _generate_random_map_desc(size=4, hole_probability=1.0)
 
 
 def test_frozen_lake_extended_env_honors_slippery_success_rate() -> None:
@@ -223,6 +235,14 @@ def test_frozen_lake_task_editor_accepts_custom_grid_size() -> None:
     assert len(widget._task.config["map_desc"]) == 5
     assert widget.start_state_spin.maximum() == 24
     assert changed_tasks
+
+
+def test_frozen_lake_task_editor_limits_hole_probability_to_valid_generation_range() -> None:
+    _app()
+    widget = FrozenLakeTaskEditorWidget(_task_definition(), lambda _task: None)
+
+    assert widget.hole_probability.minimum() == pytest.approx(0.0)
+    assert widget.hole_probability.maximum() == pytest.approx(0.95)
 
 
 def test_frozen_lake_task_editor_moving_start_clears_start_override() -> None:

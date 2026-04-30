@@ -432,7 +432,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         )
 
         self.hole_probability = QDoubleSpinBox(controls)
-        self.hole_probability.setRange(0, 1)
+        self.hole_probability.setRange(0, 0.95)
         self.hole_probability.setSingleStep(0.05)
         self.hole_probability.setDecimals(2)
         self.hole_probability.setValue(float(self._task.config.get("hole_probability", 0.22)))

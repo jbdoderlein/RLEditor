@@ -78,8 +78,9 @@ def _map_from_task_config(config: dict[str, object], *, fallback_size: int = 4) 
 
 
 def _generate_random_map_desc(size: int, hole_probability: float) -> list[str]:
-    p_frozen = max(0.1, min(0.95, 1.0 - hole_probability))
-    return [str(row) for row in generate_random_map(size=size, p=p_frozen)]
+    if not 0.0 <= hole_probability < 1.0:
+        raise ValueError("Frozen Lake hole_probability must be in [0, 1)")
+    return [str(row) for row in generate_random_map(size=size, p=1.0 - hole_probability)]
 
 
 def _parse_success_rate(value: object, *, fallback: float = DEFAULT_SUCCESS_RATE) -> float:
