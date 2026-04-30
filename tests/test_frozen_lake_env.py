@@ -4,6 +4,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtWidgets import QApplication, QLayout, QSizePolicy
 
 from rleditor.core.models import EpisodeMoment, EpisodeStep, EpisodeTrace, TaskDefinition, TaskSnapshot
@@ -80,6 +81,34 @@ def test_frozen_lake_extended_env_honors_start_state_override() -> None:
         assert env.export_state().state_index == 6
     finally:
         env.close()
+
+
+def test_frozen_lake_extended_env_honors_slippery_success_rate() -> None:
+    task = _task_definition()
+    task.config["is_slippery"] = True
+    task.config["success_rate"] = 0.8
+
+    env = FrozenLakeExtendedEnv(task)
+    try:
+        transitions = env.unwrapped.P[6][2]
+        intended_probabilities = [
+            probability
+            for probability, next_state, _reward, _terminated in transitions
+            if next_state == 7
+        ]
+
+        assert sum(probability for probability, *_rest in transitions) == pytest.approx(1.0)
+        assert intended_probabilities == [pytest.approx(0.8)]
+    finally:
+        env.close()
+
+
+def test_frozen_lake_extended_env_rejects_invalid_success_rate() -> None:
+    task = _task_definition()
+    task.config["success_rate"] = 1.5
+
+    with pytest.raises(ValueError, match="success_rate"):
+        FrozenLakeExtendedEnv(task)
 
 
 def test_frozen_lake_extended_env_can_be_rebuilt_from_task_snapshot() -> None:
@@ -172,3 +201,22 @@ def test_frozen_lake_task_editor_accepts_custom_grid_size() -> None:
     assert len(widget._task.config["map_desc"]) == 5
     assert widget.start_state_spin.maximum() == 24
     assert changed_tasks
+
+
+def test_frozen_lake_task_editor_updates_success_rate() -> None:
+    _app()
+    task = _task_definition()
+    task.config["is_slippery"] = True
+    changed_tasks: list[TaskDefinition] = []
+    widget = FrozenLakeTaskEditorWidget(task, changed_tasks.append)
+
+    assert widget.success_rate_spin.isEnabled()
+
+    widget.success_rate_spin.setValue(0.8)
+
+    assert widget._task.config["success_rate"] == pytest.approx(0.8)
+
+    widget.slippery_checkbox.setChecked(False)
+
+    assert not widget.success_rate_spin.isEnabled()
+    assert widget._task.config["is_slippery"] is False

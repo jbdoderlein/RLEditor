@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from rleditor.core.models import EpisodeTrace, TaskDefinition, TaskDerivationOptions
 from rleditor.plugins.base import EnvironmentPlugin, EpisodeReplayWidget
 from rleditor.plugins.builtin.frozen_lake_env import (
+    DEFAULT_SUCCESS_RATE,
     FrozenLakeEnvState,
     FrozenLakeExtendedEnv,
     TILE_FROZEN,
@@ -35,6 +36,7 @@ from rleditor.plugins.builtin.frozen_lake_env import (
     _generate_random_map_desc,
     _map_from_task_config,
     _normalize_map_desc,
+    _parse_success_rate,
     _parse_size,
     _to_rows,
     coerce_frozen_lake_state_index,
@@ -213,6 +215,7 @@ class FrozenLakeEpisodeReplayWidget(EpisodeReplayWidget):
             replay_states,
             map_desc,
             bool(task_config.get("is_slippery", True)),
+            _parse_success_rate(task_config.get("success_rate")),
         )
 
         if cache_key == self._render_cache_key:
@@ -347,6 +350,7 @@ class FrozenLakeBackend:
             config={
                 "size": size,
                 "is_slippery": True,
+                "success_rate": DEFAULT_SUCCESS_RATE,
                 "hole_probability": hole_probability,
                 "map_desc": _generate_random_map_desc(size, hole_probability),
             },
@@ -418,6 +422,15 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         self.slippery_checkbox = QCheckBox("Enable slippery dynamics", controls)
         self.slippery_checkbox.setChecked(bool(self._task.config.get("is_slippery", True)))
 
+        self.success_rate_spin = QDoubleSpinBox(controls)
+        self.success_rate_spin.setRange(0.0, 1.0)
+        self.success_rate_spin.setSingleStep(0.05)
+        self.success_rate_spin.setDecimals(6)
+        self.success_rate_spin.setValue(_parse_success_rate(self._task.config.get("success_rate")))
+        self.success_rate_spin.setToolTip(
+            "Probability that the requested action is applied when slippery dynamics are enabled."
+        )
+
         self.hole_probability = QDoubleSpinBox(controls)
         self.hole_probability.setRange(0, 1)
         self.hole_probability.setSingleStep(0.05)
@@ -429,6 +442,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
 
         controls_layout.addRow("Grid size", self.size_spin)
         controls_layout.addRow("Dynamics", self.slippery_checkbox)
+        controls_layout.addRow("Success rate", self.success_rate_spin)
         controls_layout.addRow("Hole probability", self.hole_probability)
         controls_layout.addRow("", self.regenerate_button)
 
@@ -506,7 +520,8 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         root.addWidget(self.grid_host, 0, Qt.AlignmentFlag.AlignLeft)
 
         self.size_spin.valueChanged.connect(lambda _value: self._on_size_changed())
-        self.slippery_checkbox.stateChanged.connect(lambda _state: self._emit_task_change())
+        self.slippery_checkbox.stateChanged.connect(lambda _state: self._on_slippery_changed())
+        self.success_rate_spin.valueChanged.connect(lambda _value: self._emit_task_change())
         self.hole_probability.valueChanged.connect(lambda _value: self._emit_task_change())
         self.start_override_checkbox.stateChanged.connect(lambda _state: self._on_start_override_changed())
         self.start_state_spin.valueChanged.connect(lambda _value: self._emit_task_change())
@@ -515,6 +530,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         self.reward_start.valueChanged.connect(lambda _value: self._emit_task_change())
         self.reward_goal.valueChanged.connect(lambda _value: self._emit_task_change())
 
+        self._sync_success_rate_controls()
         self._sync_start_override_controls()
         self._rebuild_grid()
         self._emit_task_change()
@@ -527,6 +543,9 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
             self._task.config["hole_probability"] = 0.22
         if "is_slippery" not in self._task.config:
             self._task.config["is_slippery"] = True
+        self._task.config["success_rate"] = _parse_success_rate(
+            self._task.config.get("success_rate")
+        )
 
         map_rows = _map_from_task_config(self._task.config, fallback_size=size)
         self._map = _normalize_map_desc(map_rows, expected_size=size)
@@ -654,6 +673,13 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
         self.start_state_spin.setValue(min(max(0, start_state or 0), max_state))
         self.start_state_spin.blockSignals(False)
 
+    def _sync_success_rate_controls(self) -> None:
+        self.success_rate_spin.setEnabled(self.slippery_checkbox.isChecked())
+
+    def _on_slippery_changed(self) -> None:
+        self._sync_success_rate_controls()
+        self._emit_task_change()
+
     def _on_start_override_changed(self) -> None:
         self.start_state_spin.setEnabled(self.start_override_checkbox.isChecked())
         self._emit_task_change()
@@ -661,6 +687,7 @@ class FrozenLakeTaskEditorWidget(QGroupBox):
     def _emit_task_change(self) -> None:
         self._task.config["size"] = len(self._map)
         self._task.config["is_slippery"] = self.slippery_checkbox.isChecked()
+        self._task.config["success_rate"] = float(self.success_rate_spin.value())
         self._task.config["hole_probability"] = float(self.hole_probability.value())
         self._task.config["map_desc"] = _to_rows(self._map)
         if self.start_override_checkbox.isChecked():
