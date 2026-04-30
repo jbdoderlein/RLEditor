@@ -2,17 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
+import json
 from math import hypot
+from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -404,6 +409,16 @@ class CheckpointHistoryView(QWidget):
 
         self.training_source_label = QLabel("Training start checkpoint: scratch")
         self.training_source_label.setWordWrap(True)
+        self.export_curriculum_button = QPushButton("Export", right_panel)
+        self.export_curriculum_button.setToolTip(
+            "Export the ordered curriculum with recorded episode traces."
+        )
+        self.export_curriculum_button.setEnabled(False)
+        self.export_curriculum_without_traces_button = QPushButton("Export Without Traces", right_panel)
+        self.export_curriculum_without_traces_button.setToolTip(
+            "Export the ordered curriculum without full episode step/moment traces."
+        )
+        self.export_curriculum_without_traces_button.setEnabled(False)
         self.selection_label = QLabel("Select a training edge to inspect a run.")
         self.selection_label.setWordWrap(True)
 
@@ -428,7 +443,12 @@ class CheckpointHistoryView(QWidget):
         segment_layout.addWidget(self.episode_list, 1)
         segment_layout.addWidget(self.inspect_episode_button)
 
+        export_buttons_layout = QHBoxLayout()
+        export_buttons_layout.addWidget(self.export_curriculum_button)
+        export_buttons_layout.addWidget(self.export_curriculum_without_traces_button)
+
         right_layout.addWidget(self.training_source_label)
+        right_layout.addLayout(export_buttons_layout)
         right_layout.addWidget(self.selection_label)
         right_layout.addWidget(checkpoint_group)
         right_layout.addWidget(segment_group, 1)
@@ -445,6 +465,12 @@ class CheckpointHistoryView(QWidget):
         self.graph_widget.edge_selected.connect(self._show_edge_details)
         self.episode_list.currentRowChanged.connect(self._on_episode_selection_changed)
         self.inspect_episode_button.clicked.connect(self._emit_inspect_selected_episode)
+        self.export_curriculum_button.clicked.connect(
+            lambda _checked=False: self._export_selected_curriculum(include_episode_traces=True)
+        )
+        self.export_curriculum_without_traces_button.clicked.connect(
+            lambda _checked=False: self._export_selected_curriculum(include_episode_traces=False)
+        )
 
         self._render_empty_selection()
 
@@ -515,6 +541,7 @@ class CheckpointHistoryView(QWidget):
         self.episode_list.clear()
         self._current_segment_episodes = []
         self.inspect_episode_button.setEnabled(False)
+        self._set_export_buttons_enabled(False)
 
     def _render_empty_segment_selection(self) -> None:
         self.selection_label.setText("Select a training edge to inspect a run.")
@@ -529,6 +556,7 @@ class CheckpointHistoryView(QWidget):
             self.training_source_label.setText("Training start checkpoint: scratch")
             self._set_root_details(node)
             self._render_empty_segment_selection()
+            self._set_export_buttons_enabled(False)
             return
 
         checkpoint = node.checkpoint
@@ -538,6 +566,7 @@ class CheckpointHistoryView(QWidget):
 
         self.training_source_label.setText(f"Training start checkpoint: {checkpoint.label}")
         self._set_checkpoint_details(checkpoint, heading="Selected checkpoint")
+        self._set_export_buttons_enabled(True)
         self.segment_details.setPlainText("Select a training edge to inspect the run that produced this checkpoint.")
         self.episode_list.clear()
         self._current_segment_episodes = []
@@ -549,6 +578,7 @@ class CheckpointHistoryView(QWidget):
         task_name = task_snapshot.task_name if task_snapshot is not None else (checkpoint.task_name or "unknown")
         environment_id = task_snapshot.environment_id if task_snapshot is not None else "unknown"
         run = edge.run
+        self._set_export_buttons_enabled(True)
         self.selection_label.setText(
             f"Selected training run: {run.run_id if run is not None else checkpoint.run_id or 'unknown'}"
         )
@@ -599,6 +629,211 @@ class CheckpointHistoryView(QWidget):
         if row < 0 or row >= len(self._current_segment_episodes):
             return
         self.inspect_episode_requested.emit(self._current_segment_episodes[row])
+
+    def _set_export_buttons_enabled(self, enabled: bool) -> None:
+        self.export_curriculum_button.setEnabled(enabled)
+        self.export_curriculum_without_traces_button.setEnabled(enabled)
+
+    def _export_selected_curriculum(self, *, include_episode_traces: bool) -> None:
+        checkpoint = self._selected_export_checkpoint()
+        if checkpoint is None:
+            QMessageBox.warning(
+                self,
+                "Export Curriculum",
+                "Select a checkpoint before exporting a curriculum.",
+            )
+            return
+
+        suffix = "" if include_episode_traces else "_without_traces"
+        default_path = f"curriculum_{checkpoint.checkpoint_id}{suffix}.json"
+        selected_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Curriculum",
+            default_path,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected_path:
+            return
+
+        path = Path(selected_path).expanduser()
+        if path.suffix == "":
+            path = path.with_suffix(".json")
+
+        payload = self._curriculum_export_payload(
+            checkpoint,
+            include_episode_traces=include_episode_traces,
+        )
+        try:
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Export Curriculum",
+                f"Could not write curriculum export:\n{exc}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Export Curriculum",
+            f"Curriculum exported to:\n{path}",
+        )
+
+    def _selected_export_checkpoint(self) -> Checkpoint | None:
+        selected_edge_id = self.graph_widget.selected_edge_id
+        if selected_edge_id is not None:
+            edge = self.graph_widget.edge_for_id(selected_edge_id)
+            if edge is not None:
+                return edge.target_checkpoint
+        return self.selected_checkpoint()
+
+    def _curriculum_export_payload(
+        self,
+        target_checkpoint: Checkpoint,
+        *,
+        include_episode_traces: bool = True,
+    ) -> dict[str, object]:
+        lineage = self._checkpoint_lineage(target_checkpoint)
+        if not lineage:
+            lineage = [target_checkpoint]
+
+        runs_by_id = {run.run_id: run for run in self._snapshot.runs}
+        exported_tasks: list[dict[str, object]] = []
+        task_refs_by_key: dict[str, str] = {}
+        training_runs: list[dict[str, object]] = []
+        previous_checkpoint: Checkpoint | None = None
+        previous_checkpoint_id = "checkpoint_000_untrained"
+        for order, checkpoint in enumerate(lineage, start=1):
+            run = runs_by_id.get(checkpoint.run_id or "")
+            task_snapshot = (
+                self._snapshot.run_task_snapshots.get(checkpoint.run_id or "")
+                or checkpoint.task_snapshot
+            )
+            task_ref_id = self._task_ref_id(
+                task_snapshot,
+                exported_tasks=exported_tasks,
+                task_refs_by_key=task_refs_by_key,
+            )
+            episodes = self._episodes_for_checkpoint_segment(checkpoint, previous_checkpoint)
+            run_payload: dict[str, object] = {
+                "order": order,
+                "run_id": checkpoint.run_id,
+                "source_checkpoint_id": previous_checkpoint_id,
+                "target_checkpoint_id": checkpoint.checkpoint_id,
+                "run": None if run is None else run.to_dict(),
+                "parameters": self._run_config_payload(run),
+                "task_ref_id": task_ref_id,
+                "recorded_episode_trace_count": len(episodes),
+            }
+            if include_episode_traces:
+                run_payload["recorded_episode_traces"] = [trace.to_dict() for trace in episodes]
+            else:
+                run_payload["recorded_episode_summaries"] = [
+                    self._episode_summary_payload(trace)
+                    for trace in episodes
+                ]
+            training_runs.append(run_payload)
+            previous_checkpoint = checkpoint
+            previous_checkpoint_id = checkpoint.checkpoint_id
+
+        return {
+            "meta": {
+                "target_checkpoint_id": target_checkpoint.checkpoint_id,
+                "includes_episode_traces": include_episode_traces,
+                "training_run_count": len(training_runs),
+                "task_count": len(exported_tasks),
+            },
+            "tasks": exported_tasks,
+            "training_runs": training_runs,
+        }
+
+    def _checkpoint_lineage(self, target_checkpoint: Checkpoint) -> list[Checkpoint]:
+        checkpoints_by_id = {
+            checkpoint.checkpoint_id: checkpoint
+            for checkpoint in self._snapshot.checkpoints
+        }
+        lineage_reversed: list[Checkpoint] = []
+        seen: set[str] = set()
+        checkpoint: Checkpoint | None = target_checkpoint
+
+        while checkpoint is not None:
+            if checkpoint.checkpoint_id in seen:
+                break
+
+            seen.add(checkpoint.checkpoint_id)
+            lineage_reversed.append(checkpoint)
+
+            parent_id = checkpoint.parent_checkpoint_id
+            if parent_id is None:
+                break
+
+            parent = checkpoints_by_id.get(parent_id)
+            if parent is None:
+                break
+            checkpoint = parent
+
+        return list(reversed(lineage_reversed))
+
+    def _episodes_for_checkpoint_segment(
+        self,
+        target_checkpoint: Checkpoint,
+        source_checkpoint: Checkpoint | None,
+    ) -> list[EpisodeTrace]:
+        if target_checkpoint.run_id is None:
+            return []
+
+        traces = self._snapshot.episodes_by_run.get(target_checkpoint.run_id, [])
+        start_episode = 0
+        if source_checkpoint is not None and source_checkpoint.run_id == target_checkpoint.run_id:
+            start_episode = source_checkpoint.episode
+
+        return [
+            trace
+            for trace in traces
+            if start_episode < trace.episode_id <= target_checkpoint.episode
+        ]
+
+    def _episode_summary_payload(self, trace: EpisodeTrace) -> dict[str, object]:
+        return {
+            "episode_id": trace.episode_id,
+            "run_id": trace.run_id,
+            "total_reward": trace.total_reward,
+            "success": trace.success,
+            "step_count": len(trace.steps),
+            "moment_count": len(trace.moments),
+        }
+
+    def _task_ref_id(
+        self,
+        task_snapshot: TaskSnapshot | None,
+        *,
+        exported_tasks: list[dict[str, object]],
+        task_refs_by_key: dict[str, str],
+    ) -> str | None:
+        if task_snapshot is None:
+            return None
+
+        task_payload = task_snapshot.to_dict()
+        task_key = json.dumps(task_payload, sort_keys=True)
+        task_ref_id = task_refs_by_key.get(task_key)
+        if task_ref_id is not None:
+            return task_ref_id
+
+        task_ref_id = f"task_{len(exported_tasks) + 1:03d}"
+        task_refs_by_key[task_key] = task_ref_id
+        exported_tasks.append(
+            {
+                "task_ref_id": task_ref_id,
+                **task_payload,
+            }
+        )
+        return task_ref_id
+
+    def _run_config_payload(self, run: TrainingRun | None) -> dict[str, object] | None:
+        if run is None:
+            return None
+        run_config = run.metadata.get("run_config")
+        return dict(run_config) if isinstance(run_config, dict) else None
 
     def _latest_checkpoint(self) -> Checkpoint | None:
         if not self._snapshot.checkpoints:
