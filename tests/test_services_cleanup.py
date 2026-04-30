@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 import time
 
-from gymnasium.spaces import Discrete
+from gymnasium.spaces import Box, Discrete
+import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -92,6 +93,32 @@ class _NeverDoneEnv:
         _ = action
         self._state = (self._state + 1) % 4
         return self._state, 0.25, False, False, {}
+
+    def close(self) -> None:
+        return
+
+
+class _ContinuousEnv:
+    def __init__(self) -> None:
+        self.action_space = Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+        self.observation_space = Box(low=-10.0, high=10.0, shape=(2,), dtype=np.float32)
+        self._state = np.array([0.0, 0.0], dtype=np.float32)
+        self._step_count = 0
+        self.last_action = None
+
+    def reset(self, *, seed: int | None = None):
+        _ = seed
+        self._state = np.array([0.0, 0.0], dtype=np.float32)
+        self._step_count = 0
+        return self._state.copy(), {}
+
+    def step(self, action):
+        self.last_action = action
+        self._step_count += 1
+        self._state = self._state + np.asarray(action, dtype=np.float32)
+        terminated = self._step_count >= 2
+        reward = float(np.sum(action))
+        return self._state.copy(), reward, terminated, False, {}
 
     def close(self) -> None:
         return
@@ -450,6 +477,38 @@ def test_training_runner_allows_unlimited_total_steps() -> None:
     assert runner.status == TrainingStatus.RUNNING
 
     runner.stop()
+
+
+def test_training_runner_records_continuous_actions_for_random_policy() -> None:
+    runner = TrainingRunner()
+    task = TaskDefinition(environment_id="continuous", name="Continuous Task", task_id="task_continuous")
+    config = RunConfig(
+        algorithm="random",
+        max_steps=10,
+        max_episodes=1,
+        seed=13,
+        episode_trace_sample_rate=1.0,
+    )
+
+    captured: list[EpisodeTrace] = []
+    runner.episode_captured.connect(captured.append)
+    runner.start(
+        task,
+        config,
+        run_id="run_continuous",
+        env_factory=lambda _task: _ContinuousEnv(),
+    )
+
+    for _ in range(5):
+        runner._on_tick()
+        if runner.status == TrainingStatus.FINISHED:
+            break
+
+    assert runner.status == TrainingStatus.FINISHED
+    assert captured
+    assert isinstance(captured[0].steps[0].action, list)
+    assert len(captured[0].steps[0].action) == 2
+    assert captured[0].moments[1].action_taken == captured[0].steps[0].action
 
 
 def test_training_runner_stop_breakpoint_stops_run_without_pause() -> None:

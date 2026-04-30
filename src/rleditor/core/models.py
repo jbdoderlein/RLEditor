@@ -359,7 +359,7 @@ class TrainingMetrics:
 class EpisodeStep:
     t: int
     observation: Any
-    action: int
+    action: Any
     reward: float
     next_observation: Any
     terminated: bool
@@ -370,7 +370,7 @@ class EpisodeStep:
         return {
             "t": self.t,
             "observation": _to_serializable(self.observation),
-            "action": self.action,
+            "action": _to_serializable(self.action),
             "reward": self.reward,
             "next_observation": _to_serializable(self.next_observation),
             "terminated": self.terminated,
@@ -383,7 +383,7 @@ class EpisodeStep:
         return cls(
             t=int(payload.get("t", 0)),
             observation=payload.get("observation"),
-            action=int(payload.get("action", 0)),
+            action=payload.get("action", 0),
             reward=float(payload.get("reward", 0.0)),
             next_observation=payload.get("next_observation"),
             terminated=bool(payload.get("terminated", False)),
@@ -431,7 +431,7 @@ class EpisodeMoment:
     episode_id: int
     moment_index: int
     observation: Any = None
-    action_taken: int | None = None
+    action_taken: Any | None = None
     reward: float | None = None
     restorable_env_state: Any | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -441,7 +441,7 @@ class EpisodeMoment:
             "episode_id": self.episode_id,
             "moment_index": self.moment_index,
             "observation": _to_serializable(self.observation),
-            "action_taken": self.action_taken,
+            "action_taken": _to_serializable(self.action_taken),
             "reward": self.reward,
             "restorable_env_state": _to_serializable(self.restorable_env_state),
             "metadata": _to_serializable(self.metadata),
@@ -453,11 +453,7 @@ class EpisodeMoment:
             episode_id=int(payload.get("episode_id", 0)),
             moment_index=int(payload.get("moment_index", 0)),
             observation=payload.get("observation"),
-            action_taken=(
-                int(payload.get("action_taken"))
-                if payload.get("action_taken") is not None
-                else None
-            ),
+            action_taken=payload.get("action_taken"),
             reward=(
                 float(payload.get("reward"))
                 if payload.get("reward") is not None

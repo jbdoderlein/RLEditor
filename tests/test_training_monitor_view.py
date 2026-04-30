@@ -42,6 +42,17 @@ def test_training_monitor_can_build_unlimited_step_config() -> None:
     assert config.max_steps is None
 
 
+def test_training_monitor_uses_selected_task_algorithm_hint() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    view.set_algorithm_hint("random")
+    config = view.build_config()
+
+    assert config.algorithm == "random"
+    assert view.algorithm_label.text() == "random"
+
+
 def test_training_monitor_surfaces_classic_q_learning_metrics() -> None:
     _app()
     view = TrainingMonitorView()

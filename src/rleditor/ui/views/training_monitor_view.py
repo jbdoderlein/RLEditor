@@ -213,6 +213,7 @@ class TrainingMonitorView(QWidget):
         self._metric_cards: dict[str, MetricCard] = {}
         self._run_metric_panels: dict[str, RunMetricPanel] = {}
         self._breakpoint_rules: list[Breakpoint] = []
+        self._algorithm = "q_learning"
         self._formatters: dict[str, Callable[[float | None], str]] = {
             "episode_reward_mean": lambda value: _format_scalar(value),
             "success_rate": lambda value: _format_percent(value),
@@ -252,6 +253,10 @@ class TrainingMonitorView(QWidget):
         self.trace_sample_rate_spin.setSuffix(" %")
         self.trace_sample_rate_spin.setValue(100.0)
 
+        self.algorithm_label = QLabel(self._algorithm, config_group)
+        self.algorithm_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        config_form.addRow("Algorithm", self.algorithm_label)
         config_form.addRow("Max steps", self.total_steps_spin)
         config_form.addRow("Max steps / episode", self.max_steps_per_episode_spin)
         config_form.addRow("Recorded episodes", self.trace_sample_rate_spin)
@@ -291,7 +296,7 @@ class TrainingMonitorView(QWidget):
 
     def build_config(self) -> RunConfig:
         return RunConfig(
-            algorithm="q_learning",
+            algorithm=self._algorithm,
             episode_trace_sample_rate=self.trace_sample_rate_spin.value() / 100.0,
             max_steps=(
                 self.total_steps_spin.value()
@@ -313,6 +318,13 @@ class TrainingMonitorView(QWidget):
                 for rule in self._breakpoint_rules
             ],
         )
+
+    def set_algorithm_hint(self, algorithm: str | None) -> None:
+        candidate = str(algorithm or "q_learning").strip()
+        if not candidate:
+            candidate = "q_learning"
+        self._algorithm = candidate
+        self.algorithm_label.setText(candidate)
 
     def set_status(self, status: TrainingStatus) -> None:
         self.status_label.setText(f"Status: {status.value}")

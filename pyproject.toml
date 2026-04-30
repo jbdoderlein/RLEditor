@@ -17,6 +17,11 @@ dependencies = [
     "tensorflow>=2.21.0",
 ]
 
+[project.optional-dependencies]
+mujoco = [
+    "gymnasium[mujoco]>=1.2.3",
+]
+
 [project.scripts]
 rleditor = "rleditor.main:main"
 

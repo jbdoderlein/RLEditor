@@ -244,6 +244,7 @@ class TrainingRunner(QObject):
         )
 
         action = self._select_action(previous_observation, env)
+        normalized_action = self._normalize_action(action)
 
         step_result = env.step(action)
         if isinstance(step_result, tuple) and len(step_result) == 5:
@@ -278,7 +279,7 @@ class TrainingRunner(QObject):
                 EpisodeStep(
                     t=self._episode_step_counter,
                     observation=normalized_previous_observation,
-                    action=int(action),
+                    action=normalized_action,
                     reward=reward_value,
                     next_observation=normalized_observation,
                     terminated=done and info_payload.get("forced_failure") != "max_steps_per_episode",
@@ -292,7 +293,7 @@ class TrainingRunner(QObject):
                     episode_id=self._current_episode_id(),
                     moment_index=self._episode_step_counter + 1,
                     observation=normalized_observation,
-                    action_taken=int(action),
+                    action_taken=normalized_action,
                     reward=reward_value,
                     restorable_env_state=self._maybe_export_restorable_state(env),
                     metadata={
@@ -313,7 +314,7 @@ class TrainingRunner(QObject):
         if self._config.algorithm == "q_learning":
             self._update_q_learning(
                 normalized_previous_observation,
-                int(action),
+                action,
                 reward_value,
                 normalized_observation,
                 done,
@@ -536,7 +537,7 @@ class TrainingRunner(QObject):
                 pass
         return observation
 
-    def _select_action(self, observation: Any, env: Any) -> int:
+    def _select_action(self, observation: Any, env: Any) -> Any:
         action_space = getattr(env, "action_space", None)
         action_count = self._action_space_size(action_space)
 
@@ -555,18 +556,33 @@ class TrainingRunner(QObject):
             return best_action
 
         if action_space is not None and hasattr(action_space, "sample"):
-            sampled = action_space.sample()
-            try:
-                return int(sampled)
-            except (TypeError, ValueError):
-                return 0
+            return action_space.sample()
 
         return 0
+
+    def _normalize_action(self, action: Any) -> Any:
+        if action is None or isinstance(action, (str, int, float, bool)):
+            return action
+        if hasattr(action, "item") and callable(getattr(action, "item")):
+            try:
+                return action.item()
+            except Exception:
+                pass
+        if hasattr(action, "tolist") and callable(getattr(action, "tolist")):
+            try:
+                return action.tolist()
+            except Exception:
+                pass
+        if isinstance(action, tuple):
+            return [self._normalize_action(item) for item in action]
+        if isinstance(action, list):
+            return [self._normalize_action(item) for item in action]
+        return repr(action)
 
     def _update_q_learning(
         self,
         state: Any,
-        action: int,
+        action: Any,
         reward: float,
         next_state: Any,
         done: bool,
@@ -577,11 +593,17 @@ class TrainingRunner(QObject):
             self._metrics.value_loss = None
             self._metrics.policy_loss = None
             return
+        try:
+            action_index = int(action)
+        except (TypeError, ValueError):
+            self._metrics.value_loss = None
+            self._metrics.policy_loss = None
+            return
 
         state_key = self._state_key(state)
         next_state_key = self._state_key(next_state)
 
-        current_q = self._q_values.get((state_key, action), 0.0)
+        current_q = self._q_values.get((state_key, action_index), 0.0)
         if done:
             target = reward
         else:
@@ -593,7 +615,7 @@ class TrainingRunner(QObject):
 
         td_error = target - current_q
         updated_q = current_q + self._config.learning_rate * td_error
-        self._q_values[(state_key, action)] = updated_q
+        self._q_values[(state_key, action_index)] = updated_q
 
         self._metrics.value_loss = abs(td_error)
         self._metrics.policy_loss = None
