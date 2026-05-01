@@ -425,6 +425,8 @@ class FrozenLakeExtendedEnv(gym.Wrapper):
             is_slippery=bool(task.config.get("is_slippery", True)),
             success_rate=success_rate,
             render_mode=render_mode,
+            # Keep episode limits explicit in RunConfig instead of Gymnasium's hidden default TimeLimit(100).
+            max_episode_steps=-1,
         )
 
         wrapped_env: gym.Env = FrozenLakeRewardWrapper(env, task.reward_config)

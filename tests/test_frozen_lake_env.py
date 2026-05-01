@@ -106,6 +106,30 @@ def test_frozen_lake_extended_env_starts_on_map_start_tile() -> None:
         env.close()
 
 
+def test_frozen_lake_extended_env_does_not_apply_gym_time_limit() -> None:
+    task = _task_definition()
+    task.config["is_slippery"] = False
+    task.config["map_desc"] = [
+        "SFFF",
+        "FFFF",
+        "FFFF",
+        "FFFG",
+    ]
+
+    env = FrozenLakeExtendedEnv(task)
+    try:
+        env.reset(seed=9)
+        terminated = False
+        truncated = False
+        for _step in range(101):
+            _observation, _reward, terminated, truncated, _info = env.step(0)
+
+        assert terminated is False
+        assert truncated is False
+    finally:
+        env.close()
+
+
 def test_frozen_lake_random_map_hole_probability_zero_has_no_holes() -> None:
     map_desc = _generate_random_map_desc(size=8, hole_probability=0.0)
 
