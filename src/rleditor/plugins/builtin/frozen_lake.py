@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
@@ -88,6 +89,7 @@ class FrozenLakeEpisodeReplayWidget(EpisodeReplayWidget):
         self._active_map_shape: tuple[int, int] | None = None
         self._render_cache_key: tuple[object, ...] | None = None
         self._render_frames: list[QPixmap | None] = []
+        self._current_render_pixmap: QPixmap | None = None
 
         root = QVBoxLayout(self)
         self.summary_label = QLabel("No replay frame selected.", self)
@@ -96,7 +98,8 @@ class FrozenLakeEpisodeReplayWidget(EpisodeReplayWidget):
 
         self.render_label = QLabel("Gymnasium frame preview unavailable.", self)
         self.render_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.render_label.setMinimumHeight(120)
+        self.render_label.setMinimumHeight(160)
+        self.render_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.render_label.setStyleSheet(
             "QLabel { border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; }"
         )
@@ -106,11 +109,22 @@ class FrozenLakeEpisodeReplayWidget(EpisodeReplayWidget):
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
         self.grid_layout.setHorizontalSpacing(4)
         self.grid_layout.setVerticalSpacing(4)
+        self.grid_layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+        self.grid_host.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+        self.grid_scroll = QScrollArea(self)
+        self.grid_scroll.setWidgetResizable(False)
+        self.grid_scroll.setMinimumHeight(150)
+        self.grid_scroll.setWidget(self.grid_host)
 
         root.addWidget(self.summary_label)
         root.addWidget(self.action_label)
-        root.addWidget(self.render_label)
-        root.addWidget(self.grid_host)
+        root.addWidget(self.render_label, 1)
+        root.addWidget(self.grid_scroll, 1)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_scaled_render_pixmap()
 
     def set_frame(
         self,
@@ -120,6 +134,7 @@ class FrozenLakeEpisodeReplayWidget(EpisodeReplayWidget):
         if not trace.steps:
             self.summary_label.setText("Episode has no steps.")
             self.action_label.setText("")
+            self._current_render_pixmap = None
             self.render_label.setPixmap(QPixmap())
             self.render_label.setText("Gymnasium frame preview unavailable.")
             return
@@ -175,19 +190,34 @@ class FrozenLakeEpisodeReplayWidget(EpisodeReplayWidget):
     ) -> None:
         frames = self._get_or_build_render_frames(trace, task_config)
         if step_index < 0 or step_index >= len(frames):
+            self._current_render_pixmap = None
             self.render_label.setPixmap(QPixmap())
             self.render_label.setText("Frame preview unavailable for this step.")
             return
 
         pixmap = frames[step_index]
         if pixmap is None or pixmap.isNull():
+            self._current_render_pixmap = None
             self.render_label.setPixmap(QPixmap())
             self.render_label.setText("Gymnasium frame preview unavailable.")
             return
 
+        self._set_render_pixmap(pixmap)
+
+    def _set_render_pixmap(self, pixmap: QPixmap) -> None:
+        self._current_render_pixmap = pixmap
+        self._refresh_scaled_render_pixmap()
+
+    def _refresh_scaled_render_pixmap(self) -> None:
+        pixmap = self._current_render_pixmap
+        if pixmap is None or pixmap.isNull():
+            return
+
+        target_width = max(1, self.render_label.width() - 12)
+        target_height = max(1, self.render_label.height() - 12)
         scaled = pixmap.scaled(
-            360,
-            260,
+            target_width,
+            target_height,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
@@ -309,7 +339,7 @@ class FrozenLakeEpisodeReplayWidget(EpisodeReplayWidget):
                 state_index = row * cols + col
                 tile = QLabel(f"{map_desc[row][col]}\n{state_index}", self.grid_host)
                 tile.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                tile.setMinimumSize(42, 42)
+                tile.setFixedSize(42, 42)
                 self.grid_layout.addWidget(tile, row, col)
                 self._cells[state_index] = tile
 

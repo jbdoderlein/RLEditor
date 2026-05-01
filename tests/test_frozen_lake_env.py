@@ -5,10 +5,15 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QLayout, QSizePolicy
 
 from rleditor.core.models import EpisodeMoment, EpisodeStep, EpisodeTrace, TaskDefinition, TaskSnapshot
-from rleditor.plugins.builtin.frozen_lake import FrozenLakeBackend, FrozenLakeTaskEditorWidget
+from rleditor.plugins.builtin.frozen_lake import (
+    FrozenLakeBackend,
+    FrozenLakeEpisodeReplayWidget,
+    FrozenLakeTaskEditorWidget,
+)
 from rleditor.plugins.builtin.frozen_lake_env import (
     FrozenLakeEnvState,
     FrozenLakeExtendedEnv,
@@ -244,6 +249,39 @@ def test_frozen_lake_task_editor_grid_uses_fixed_spacing() -> None:
     assert widget.grid_layout.sizeConstraint() == QLayout.SizeConstraint.SetFixedSize
     assert widget.grid_host.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Fixed
     assert widget.grid_host.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
+
+
+def test_frozen_lake_episode_replay_grid_scrolls_large_maps() -> None:
+    _app()
+    widget = FrozenLakeEpisodeReplayWidget()
+    map_desc = [
+        "S" + ("F" * 15),
+        *(["F" * 16] * 14),
+        ("F" * 15) + "G",
+    ]
+
+    widget._ensure_map_grid(map_desc)
+
+    assert widget.grid_scroll.widget() is widget.grid_host
+    assert widget.grid_layout.sizeConstraint() == QLayout.SizeConstraint.SetFixedSize
+    assert widget.grid_host.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Fixed
+    assert widget.grid_host.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
+    assert widget._cells[0].maximumWidth() == 42
+    assert widget._cells[0].maximumHeight() == 42
+
+
+def test_frozen_lake_episode_replay_preview_scales_to_label_bounds() -> None:
+    _app()
+    widget = FrozenLakeEpisodeReplayWidget()
+    widget.render_label.setFixedSize(120, 80)
+    pixmap = QPixmap(512, 512)
+
+    widget._set_render_pixmap(pixmap)
+
+    scaled = widget.render_label.pixmap()
+    assert scaled is not None
+    assert scaled.width() <= widget.render_label.width()
+    assert scaled.height() <= widget.render_label.height()
 
 
 def test_frozen_lake_task_editor_accepts_custom_grid_size() -> None:
