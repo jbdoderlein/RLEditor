@@ -284,11 +284,11 @@ class MainWindow(QMainWindow):
 
     def _on_checkpoint_import_requested(self, checkpoint: Checkpoint) -> None:
         try:
-            self._training_service.import_checkpoint(checkpoint)
+            imported_checkpoint = self._training_service.import_checkpoint(checkpoint)
         except RuntimeError as exc:
             self.statusBar().showMessage(str(exc))
             return
-        self.statusBar().showMessage(f"Imported checkpoint: {checkpoint.checkpoint_id}")
+        self.statusBar().showMessage(f"Imported checkpoint: {imported_checkpoint.checkpoint_id}")
 
     def _refresh_history_view(self) -> None:
         self.history_view.set_history(self._training_service.history_snapshot(deep=False))

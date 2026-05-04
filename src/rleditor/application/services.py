@@ -197,18 +197,20 @@ class TrainingService(QObject):
         self._checkpoint_counter = self._next_checkpoint_counter_floor()
         self.history_changed.emit()
 
-    def import_checkpoint(self, checkpoint: Checkpoint) -> None:
+    def import_checkpoint(self, checkpoint: Checkpoint) -> Checkpoint:
         if self._has_live_runs():
             msg = "Cannot import a checkpoint while training is active."
             raise RuntimeError(msg)
-        if not checkpoint.checkpoint_id:
-            msg = "Cannot import a checkpoint without a checkpoint_id."
-            raise RuntimeError(msg)
-        if any(existing.checkpoint_id == checkpoint.checkpoint_id for existing in self._checkpoints):
-            msg = f"Checkpoint '{checkpoint.checkpoint_id}' already exists."
-            raise RuntimeError(msg)
 
         imported_checkpoint = deepcopy(checkpoint)
+        original_checkpoint_id = imported_checkpoint.checkpoint_id
+        if not original_checkpoint_id or self._checkpoint_id_exists(original_checkpoint_id):
+            imported_checkpoint.checkpoint_id = self._next_available_checkpoint_id()
+            imported_checkpoint.label = self._renamed_import_label(
+                imported_checkpoint.label,
+                imported_checkpoint.checkpoint_id,
+            )
+
         self._checkpoints.append(imported_checkpoint)
         if imported_checkpoint.run_id is not None and imported_checkpoint.task_snapshot is not None:
             self._run_task_snapshots.setdefault(
@@ -217,6 +219,7 @@ class TrainingService(QObject):
             )
         self._checkpoint_counter = self._next_checkpoint_counter_floor()
         self.history_changed.emit()
+        return deepcopy(imported_checkpoint)
 
     def start(
         self,
@@ -799,6 +802,24 @@ class TrainingService(QObject):
         if task_snapshot is None or task_snapshot.environment_id != task.environment_id:
             return False
         return checkpoint.metadata.get("algorithm") == config.algorithm
+
+    def _checkpoint_id_exists(self, checkpoint_id: str) -> bool:
+        return any(checkpoint.checkpoint_id == checkpoint_id for checkpoint in self._checkpoints)
+
+    def _next_available_checkpoint_id(self) -> str:
+        counter = self._next_checkpoint_counter_floor() + 1
+        while True:
+            checkpoint_id = f"checkpoint_{counter:03d}"
+            if not self._checkpoint_id_exists(checkpoint_id):
+                return checkpoint_id
+            counter += 1
+
+    def _renamed_import_label(self, label: str, checkpoint_id: str) -> str:
+        base_label = label.strip() if label else "Imported Checkpoint"
+        suffix = f"imported as {checkpoint_id}"
+        if suffix in base_label:
+            return base_label
+        return f"{base_label} | {suffix}"
 
     def _next_checkpoint_counter_floor(self) -> int:
         pattern = re.compile(r"^checkpoint_(\d+)$")

@@ -849,7 +849,7 @@ def test_training_service_keeps_checkpoint_learner_state_in_memory_for_project_s
     assert checkpoint.metadata["learner_state"]["q_values"]
 
 
-def test_training_service_imports_checkpoint_and_rejects_duplicate_ids() -> None:
+def test_training_service_imports_checkpoint_and_renames_duplicate_ids() -> None:
     service = TrainingService(_history_registry())
     checkpoint = Checkpoint(
         checkpoint_id="checkpoint_009",
@@ -871,15 +871,21 @@ def test_training_service_imports_checkpoint_and_rejects_duplicate_ids() -> None
         },
     )
 
-    service.import_checkpoint(checkpoint)
+    first_import = service.import_checkpoint(checkpoint)
     snapshot = service.history_snapshot()
 
+    assert first_import.checkpoint_id == "checkpoint_009"
     assert snapshot.checkpoints[-1].checkpoint_id == "checkpoint_009"
     assert service._checkpoint_counter == 9
     assert snapshot.run_task_snapshots["run_imported"].task_name == "Imported Tiny Task"
 
-    with pytest.raises(RuntimeError, match="already exists"):
-        service.import_checkpoint(checkpoint)
+    second_import = service.import_checkpoint(checkpoint)
+    snapshot = service.history_snapshot()
+
+    assert second_import.checkpoint_id == "checkpoint_010"
+    assert second_import.label == "Imported Checkpoint | imported as checkpoint_010"
+    assert snapshot.checkpoints[-1].checkpoint_id == "checkpoint_010"
+    assert service._checkpoint_counter == 10
 
 
 def test_training_service_can_start_from_selected_checkpoint_instead_of_latest() -> None:
