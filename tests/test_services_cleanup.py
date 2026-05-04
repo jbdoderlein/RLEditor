@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import time
 
-from gymnasium.spaces import Discrete
+import gymnasium as gym
+import numpy as np
 import pytest
+from gymnasium.spaces import Box, Discrete
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -75,6 +77,77 @@ class _TinyEnv:
 
     def close(self) -> None:
         return
+
+
+class _TinyGymEnv(gym.Env):
+    action_space = Discrete(2)
+    observation_space = Discrete(4)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._state = 0
+
+    def reset(self, *, seed: int | None = None, options=None):
+        super().reset(seed=seed)
+        _ = options
+        self._state = 0
+        return self._state, {}
+
+    def step(self, action: int):
+        _ = action
+        self._state = min(3, self._state + 1)
+        terminated = self._state >= 3
+        reward = 1.0 if terminated else 0.0
+        return self._state, reward, terminated, False, {}
+
+
+class _TinyGymBackend:
+    def default_task(self) -> TaskDefinition:
+        return TaskDefinition(
+            environment_id="tiny_gym_env",
+            name="Tiny Gym Task",
+            task_id="task_tiny_gym",
+        )
+
+    def create_env(self, task: TaskDefinition):
+        _ = task
+        return _TinyGymEnv()
+
+
+class _TinyContinuousGymEnv(gym.Env):
+    action_space = Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+    observation_space = Box(low=-10.0, high=10.0, shape=(2,), dtype=np.float32)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._state = 0.0
+
+    def reset(self, *, seed: int | None = None, options=None):
+        super().reset(seed=seed)
+        _ = options
+        self._state = 0.0
+        return np.array([self._state, 0.0], dtype=np.float32), {}
+
+    def step(self, action):
+        action_value = float(np.asarray(action, dtype=np.float32).reshape(-1)[0])
+        self._state += max(-1.0, min(1.0, action_value)) + 0.5
+        terminated = self._state >= 1.5
+        reward = -abs(1.5 - self._state)
+        observation = np.array([self._state, action_value], dtype=np.float32)
+        return observation, reward, terminated, False, {}
+
+
+class _TinyContinuousGymBackend:
+    def default_task(self) -> TaskDefinition:
+        return TaskDefinition(
+            environment_id="tiny_continuous_gym_env",
+            name="Tiny Continuous Gym Task",
+            task_id="task_tiny_continuous_gym",
+        )
+
+    def create_env(self, task: TaskDefinition):
+        _ = task
+        return _TinyContinuousGymEnv()
 
 
 class _NeverDoneEnv:
@@ -158,6 +231,29 @@ def _history_registry() -> PluginRegistry:
             display_name="Tiny Env",
             description="History test plugin",
             backend=_TinyBackend(),
+            gui_extension=None,
+        )
+    )
+    return registry
+
+
+def _sb3_registry() -> PluginRegistry:
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="tiny_gym_env",
+            display_name="Tiny Gym Env",
+            description="SB3 training test plugin",
+            backend=_TinyGymBackend(),
+            gui_extension=None,
+        )
+    )
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="tiny_continuous_gym_env",
+            display_name="Tiny Continuous Gym Env",
+            description="SB3 continuous training test plugin",
+            backend=_TinyContinuousGymBackend(),
             gui_extension=None,
         )
     )
@@ -788,6 +884,75 @@ def test_training_service_background_mode_completes_without_manual_ticks() -> No
     assert service.status == TrainingStatus.FINISHED
     assert snapshot.runs[-1].status == TrainingStatus.FINISHED
     assert snapshot.checkpoints
+
+
+def test_training_service_can_run_stable_baselines3_dqn_backend() -> None:
+    service = TrainingService(_sb3_registry())
+    task = TaskDefinition(
+        environment_id="tiny_gym_env",
+        name="SB3 Tiny Task",
+        task_id="task_sb3_tiny",
+    )
+    config = RunConfig(
+        algorithm="sb3_dqn",
+        max_steps=6,
+        seed=71,
+        episode_trace_sample_rate=1.0,
+        hyperparameters={
+            "learning_starts": 0,
+            "buffer_size": 32,
+            "batch_size": 1,
+            "train_freq": 1,
+            "gradient_steps": 1,
+            "target_update_interval": 4,
+            "exploration_fraction": 0.2,
+            "exploration_initial_eps": 1.0,
+            "exploration_final_eps": 0.05,
+        },
+    )
+
+    service.start(task, config, run_in_background=True)
+
+    _wait_for(lambda: service.status == TrainingStatus.FINISHED, timeout_seconds=10.0)
+    snapshot = service.history_snapshot()
+
+    assert snapshot.runs[-1].metadata["algorithm"] == "sb3_dqn"
+    assert snapshot.runs[-1].metadata["run_config"]["algorithm"] == "sb3_dqn"
+    assert snapshot.checkpoints[-1].metadata["algorithm"] == "sb3_dqn"
+    assert snapshot.checkpoints[-1].metadata["learner_state"]["backend"] == "stable_baselines3"
+    assert snapshot.episodes_by_run[snapshot.runs[-1].run_id]
+
+
+def test_training_service_can_run_stable_baselines3_ppo_backend() -> None:
+    service = TrainingService(_sb3_registry())
+    task = TaskDefinition(
+        environment_id="tiny_continuous_gym_env",
+        name="SB3 Tiny Continuous Task",
+        task_id="task_sb3_tiny_continuous",
+    )
+    config = RunConfig(
+        algorithm="sb3_ppo",
+        max_steps=8,
+        seed=83,
+        episode_trace_sample_rate=1.0,
+        hyperparameters={
+            "n_steps": 4,
+            "batch_size": 4,
+            "n_epochs": 1,
+        },
+    )
+
+    service.start(task, config, run_in_background=True)
+
+    _wait_for(lambda: service.status == TrainingStatus.FINISHED, timeout_seconds=10.0)
+    snapshot = service.history_snapshot()
+    run = snapshot.runs[-1]
+    episode = snapshot.episodes_by_run[run.run_id][-1]
+
+    assert run.metadata["algorithm"] == "sb3_ppo"
+    assert snapshot.checkpoints[-1].metadata["algorithm"] == "sb3_ppo"
+    assert snapshot.checkpoints[-1].metadata["learner_state"]["backend"] == "stable_baselines3"
+    assert isinstance(episode.steps[-1].action, list)
 
 
 def test_training_service_can_run_multiple_tasks_in_parallel() -> None:

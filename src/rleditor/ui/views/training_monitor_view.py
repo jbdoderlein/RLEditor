@@ -234,6 +234,11 @@ class TrainingMonitorView(QWidget):
         config_group = QGroupBox("Run Config")
         config_form = QFormLayout(config_group)
 
+        self.algorithm_combo = QComboBox(config_group)
+        self.algorithm_combo.addItem("Q-learning", "q_learning")
+        self.algorithm_combo.addItem("Stable-Baselines3 DQN", "sb3_dqn")
+        self.algorithm_combo.addItem("Stable-Baselines3 PPO", "sb3_ppo")
+
         self.total_steps_spin = QSpinBox(config_group)
         self.total_steps_spin.setRange(-1, 50_000_000)
         self.total_steps_spin.setSpecialValueText("No limit")
@@ -252,6 +257,7 @@ class TrainingMonitorView(QWidget):
         self.trace_sample_rate_spin.setSuffix(" %")
         self.trace_sample_rate_spin.setValue(100.0)
 
+        config_form.addRow("Algorithm", self.algorithm_combo)
         config_form.addRow("Max steps", self.total_steps_spin)
         config_form.addRow("Max steps / episode", self.max_steps_per_episode_spin)
         config_form.addRow("Recorded episodes", self.trace_sample_rate_spin)
@@ -291,7 +297,7 @@ class TrainingMonitorView(QWidget):
 
     def build_config(self) -> RunConfig:
         return RunConfig(
-            algorithm="q_learning",
+            algorithm=str(self.algorithm_combo.currentData()),
             episode_trace_sample_rate=self.trace_sample_rate_spin.value() / 100.0,
             max_steps=(
                 self.total_steps_spin.value()

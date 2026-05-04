@@ -42,6 +42,32 @@ def test_training_monitor_can_build_unlimited_step_config() -> None:
     assert config.max_steps is None
 
 
+def test_training_monitor_can_select_stable_baselines3_dqn() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    index = view.algorithm_combo.findData("sb3_dqn")
+    assert index >= 0
+
+    view.algorithm_combo.setCurrentIndex(index)
+    config = view.build_config()
+
+    assert config.algorithm == "sb3_dqn"
+
+
+def test_training_monitor_can_select_stable_baselines3_ppo() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    index = view.algorithm_combo.findData("sb3_ppo")
+    assert index >= 0
+
+    view.algorithm_combo.setCurrentIndex(index)
+    config = view.build_config()
+
+    assert config.algorithm == "sb3_ppo"
+
+
 def test_training_monitor_surfaces_classic_q_learning_metrics() -> None:
     _app()
     view = TrainingMonitorView()

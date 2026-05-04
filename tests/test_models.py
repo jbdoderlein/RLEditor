@@ -198,6 +198,39 @@ def test_episode_moment_roundtrip_preserves_restorable_state() -> None:
     assert restored.restorable_env_state == {"opaque": "blob"}
 
 
+def test_episode_trace_roundtrip_preserves_vector_actions() -> None:
+    trace = EpisodeTrace(
+        episode_id=7,
+        total_reward=-1.0,
+        success=False,
+        steps=[
+            EpisodeStep(
+                t=0,
+                observation=[0.1, 0.2],
+                action=[-0.5, 0.25],
+                reward=-1.0,
+                next_observation=[0.0, 0.3],
+                terminated=False,
+                truncated=True,
+            )
+        ],
+        moments=[
+            EpisodeMoment(
+                episode_id=7,
+                moment_index=1,
+                observation=[0.0, 0.3],
+                action_taken=[-0.5, 0.25],
+                reward=-1.0,
+            )
+        ],
+    )
+
+    restored = EpisodeTrace.from_dict(trace.to_dict())
+
+    assert restored.steps[0].action == [-0.5, 0.25]
+    assert restored.moments[0].action_taken == [-0.5, 0.25]
+
+
 def test_checkpoint_roundtrip_preserves_parent_lineage() -> None:
     checkpoint = Checkpoint(
         checkpoint_id="checkpoint_002",
