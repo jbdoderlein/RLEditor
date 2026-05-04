@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 import re
+from typing import Any
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, Signal
@@ -22,6 +23,7 @@ from rleditor.core.models import (
     TrainingRun,
     TrainingStatus,
 )
+from rleditor.infra.evaluation_runner import EvaluationResult, evaluate_policy
 from rleditor.infra.training_runner import TrainingRunner
 from rleditor.plugins.registry import PluginRegistry
 
@@ -192,6 +194,27 @@ class TrainingService(QObject):
             for run in self._runs
         }
         self._run_task_snapshots = deepcopy(snapshot.run_task_snapshots)
+        self._checkpoint_counter = self._next_checkpoint_counter_floor()
+        self.history_changed.emit()
+
+    def import_checkpoint(self, checkpoint: Checkpoint) -> None:
+        if self._has_live_runs():
+            msg = "Cannot import a checkpoint while training is active."
+            raise RuntimeError(msg)
+        if not checkpoint.checkpoint_id:
+            msg = "Cannot import a checkpoint without a checkpoint_id."
+            raise RuntimeError(msg)
+        if any(existing.checkpoint_id == checkpoint.checkpoint_id for existing in self._checkpoints):
+            msg = f"Checkpoint '{checkpoint.checkpoint_id}' already exists."
+            raise RuntimeError(msg)
+
+        imported_checkpoint = deepcopy(checkpoint)
+        self._checkpoints.append(imported_checkpoint)
+        if imported_checkpoint.run_id is not None and imported_checkpoint.task_snapshot is not None:
+            self._run_task_snapshots.setdefault(
+                imported_checkpoint.run_id,
+                deepcopy(imported_checkpoint.task_snapshot),
+            )
         self._checkpoint_counter = self._next_checkpoint_counter_floor()
         self.history_changed.emit()
 
@@ -500,6 +523,32 @@ class TrainingService(QObject):
 
         task_snapshot = self._run_task_snapshots.get(run_id) or context.task_snapshot
         learner_state = context.runner.export_learner_state()
+        evaluation_result, evaluation_error = self._evaluate_checkpoint_policy(
+            checkpoint_id=checkpoint_id,
+            context=context,
+            learner_state=learner_state,
+        )
+
+        metadata: dict[str, Any] = {
+            "algorithm": context.config.algorithm,
+            "seed": context.config.seed,
+            "run_config_id": context.config.run_config_id,
+            "training_metrics": self._metrics_payload(context.latest_metrics),
+            "learner_state": learner_state,
+        }
+        if evaluation_result is not None:
+            metadata["evaluation_metrics"] = self._metrics_payload(evaluation_result.metrics)
+            metadata["evaluation"] = {
+                "run_id": evaluation_result.run_id,
+                "task_id": evaluation_result.task.task_id,
+                "task_name": evaluation_result.task.name,
+                "environment_id": evaluation_result.task.environment_id,
+                "episode_count": evaluation_result.metrics.episode,
+                "max_steps_per_episode": self._evaluation_max_steps_per_episode(context.config),
+                "trace_sample_rate": 1.0,
+            }
+        elif evaluation_error is not None:
+            metadata["evaluation_error"] = evaluation_error
 
         checkpoint = Checkpoint(
             checkpoint_id=checkpoint_id,
@@ -513,18 +562,84 @@ class TrainingService(QObject):
             step=context.latest_metrics.step,
             episode=context.latest_metrics.episode,
             task_snapshot=deepcopy(task_snapshot),
-            metadata={
-                "algorithm": context.config.algorithm,
-                "seed": context.config.seed,
-                "run_config_id": context.config.run_config_id,
-                "training_metrics": self._metrics_payload(context.latest_metrics),
-                "learner_state": learner_state,
-            },
+            metadata=metadata,
         )
 
         self._checkpoints.append(checkpoint)
         self.history_changed.emit()
         return True
+
+    def _evaluate_checkpoint_policy(
+        self,
+        *,
+        checkpoint_id: str,
+        context: _RunContext,
+        learner_state: dict[str, Any],
+    ) -> tuple[EvaluationResult | None, str | None]:
+        policy = context.config.evaluation_policy
+        if not isinstance(policy, dict) or not policy:
+            return None, None
+
+        task_payload = policy.get("task")
+        if not isinstance(task_payload, dict):
+            return None, "Evaluation policy does not contain a task snapshot."
+
+        try:
+            episode_count = int(policy.get("episode_count", 0))
+        except (TypeError, ValueError):
+            return None, "Evaluation episode count is invalid."
+        if episode_count <= 0:
+            return None, None
+
+        max_steps_per_episode = self._evaluation_max_steps_per_episode(context.config)
+        evaluation_task = self._task_from_policy_payload(task_payload)
+        evaluation_run_id = f"eval_{checkpoint_id}"
+
+        try:
+            result = evaluate_policy(
+                task=evaluation_task,
+                config=context.config,
+                learner_state=learner_state,
+                env_factory=self._resolve_env_factory(evaluation_task),
+                run_id=evaluation_run_id,
+                episode_count=episode_count,
+                max_steps_per_episode=max_steps_per_episode,
+            )
+        except Exception as exc:
+            return None, str(exc)
+
+        self._episodes_by_run[evaluation_run_id] = deepcopy(result.episodes)
+        self._pending_episodes_by_run[evaluation_run_id] = []
+        self._run_task_snapshots[evaluation_run_id] = deepcopy(result.task_snapshot)
+        return result, None
+
+    def _evaluation_max_steps_per_episode(self, config: RunConfig) -> int | None:
+        policy = config.evaluation_policy
+        if not isinstance(policy, dict):
+            return None
+        raw_value = policy.get("max_steps_per_episode")
+        if raw_value is None:
+            return None
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    def _task_from_policy_payload(self, payload: dict[str, Any]) -> TaskDefinition:
+        derived_keys = {
+            "derived_task_id",
+            "parent_task_id",
+            "derivation_reason",
+            "source_episode_id",
+            "source_moment_index",
+            "source_run_id",
+            "start_state",
+            "goal_state",
+        }
+        if any(key in payload for key in derived_keys):
+            return DerivedTaskDefinition.from_dict(payload)
+        return TaskDefinition.from_dict(payload)
 
     def _flush_pending_episodes(
         self,

@@ -368,6 +368,22 @@ def export_stable_baselines3_learner_state(model: Any, *, algorithm: str) -> dic
     }
 
 
+def load_stable_baselines3_model(
+    *,
+    algorithm: str,
+    env: gym.Env,
+    learner_state: dict[str, Any],
+) -> Any:
+    model = _load_model_from_learner_state(
+        algorithm=algorithm,
+        env=env,
+        learner_state=learner_state,
+    )
+    if model is None:
+        raise ValueError(f"Cannot load Stable-Baselines3 learner state for algorithm: {algorithm}")
+    return model
+
+
 def _load_model_from_learner_state(
     *,
     algorithm: str,

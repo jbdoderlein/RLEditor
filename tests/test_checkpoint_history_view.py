@@ -58,6 +58,128 @@ def test_checkpoint_history_view_renders_checkpoint_details_as_html_tables() -> 
     assert "20.0%" in html
 
 
+def test_checkpoint_history_view_prefers_evaluation_metrics_and_lists_eval_episodes() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_004",
+        label="Checkpoint 004",
+        created_at="2026-04-28 11:30:00",
+        reason="run_finished",
+        run_id="run_train",
+        task_name="Training Task",
+        step=50,
+        episode=3,
+        task_snapshot=TaskSnapshot(
+            environment_id="tiny_env",
+            task_name="Training Task",
+        ),
+        metadata={
+            "evaluation": {
+                "run_id": "eval_checkpoint_004",
+                "task_name": "Evaluation Task",
+                "environment_id": "tiny_env",
+                "episode_count": 2,
+                "max_steps_per_episode": 5,
+            },
+            "evaluation_metrics": {
+                "mean_reward": 1.0,
+                "success_rate": 1.0,
+                "episode_reward_mean": 1.0,
+                "episode_length_mean": 3.0,
+                "exploration_rate": 0.0,
+                "value_loss": None,
+                "policy_loss": None,
+            },
+            "training_metrics": {
+                "mean_reward": 0.0,
+                "success_rate": 0.0,
+            },
+        },
+    )
+    snapshot = TrainingHistorySnapshot(
+        runs=[],
+        checkpoints=[checkpoint],
+        episodes_by_run={
+            "eval_checkpoint_004": [
+                EpisodeTrace(episode_id=1, run_id="eval_checkpoint_004", total_reward=1.0, success=True),
+                EpisodeTrace(episode_id=2, run_id="eval_checkpoint_004", total_reward=1.0, success=True),
+            ]
+        },
+        run_task_snapshots={},
+    )
+
+    view.set_history(snapshot)
+
+    assert "Evaluation metrics" in view.checkpoint_details.toHtml()
+    assert "100.0%" in view.checkpoint_details.toHtml()
+    assert "Evaluation Task" in view.segment_details.toPlainText()
+    assert view.episode_list.count() == 2
+
+
+def test_checkpoint_history_view_builds_selected_checkpoint_export_payload() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_005",
+        label="Checkpoint 005",
+        created_at="2026-04-28 11:45:00",
+        reason="run_finished",
+        run_id="run_selected",
+        task_name="Selected Task",
+        step=25,
+        episode=4,
+        task_snapshot=TaskSnapshot(
+            environment_id="frozen_lake",
+            task_name="Selected Task",
+            task_id="task_selected",
+        ),
+        metadata={
+            "algorithm": "sb3_dqn",
+            "learner_state": {
+                "backend": "stable_baselines3",
+                "model_zip_base64": "abc",
+            },
+            "evaluation_metrics": {
+                "mean_reward": 1.0,
+                "success_rate": 1.0,
+            },
+        },
+    )
+
+    payload = view._checkpoint_export_payload(checkpoint)
+
+    assert payload["checkpoint_id"] == "checkpoint_005"
+    assert payload["metadata"]["algorithm"] == "sb3_dqn"
+    assert payload["metadata"]["learner_state"]["backend"] == "stable_baselines3"
+    assert payload["task_snapshot"]["task_id"] == "task_selected"
+    assert "training_runs" not in payload
+    assert "tasks" not in payload
+
+
+def test_checkpoint_history_view_parses_imported_checkpoint_payload() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_006",
+        label="Checkpoint 006",
+        created_at="2026-04-28 12:00:00",
+        reason="import_test",
+        task_snapshot=TaskSnapshot(
+            environment_id="frozen_lake",
+            task_name="Imported Task",
+        ),
+        metadata={"algorithm": "sb3_dqn"},
+    )
+
+    parsed = view._checkpoint_from_import_payload(checkpoint.to_dict())
+
+    assert parsed.checkpoint_id == "checkpoint_006"
+    assert parsed.task_snapshot is not None
+    assert parsed.task_snapshot.environment_id == "frozen_lake"
+    assert parsed.metadata["algorithm"] == "sb3_dqn"
+
+
 def test_checkpoint_history_view_builds_curriculum_export_for_selected_lineage() -> None:
     _app()
     view = CheckpointHistoryView()

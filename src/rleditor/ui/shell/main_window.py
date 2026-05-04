@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from rleditor.application.persistence import ProjectState, ProjectStore
 from rleditor.application.services import TaskService, TrainingService
 from rleditor.core.models import (
+    Checkpoint,
     EpisodeTrace,
     RunConfig,
     TaskDefinition,
@@ -25,6 +26,7 @@ from rleditor.core.models import (
 from rleditor.plugins.base import EnvironmentPlugin
 from rleditor.plugins.registry import PluginRegistry
 from rleditor.ui.views.checkpoint_history_view import CheckpointHistoryView
+from rleditor.ui.views.evaluation_view import EvaluationView
 from rleditor.ui.views.episode_inspector_view import EpisodeInspectorView
 from rleditor.ui.views.task_editor_view import TaskEditorView
 from rleditor.ui.views.task_history_view import TaskHistoryView
@@ -69,17 +71,20 @@ class MainWindow(QMainWindow):
         self.task_history_view = TaskHistoryView()
         self.task_editor_view = TaskEditorView()
         self.training_view = TrainingMonitorView()
+        self.evaluation_view = EvaluationView()
         self.episode_view = EpisodeInspectorView()
         self.history_tab = self.history_view
         self.task_history_tab = self.task_history_view
         self.task_editor_tab = self._wrap_tab(self.task_editor_view)
         self.training_tab = self._wrap_tab(self.training_view)
+        self.evaluation_tab = self._wrap_tab(self.evaluation_view)
         self.episode_tab = self._wrap_tab(self.episode_view)
 
         self.tabs.addTab(self.history_tab, "Checkpoint History")
         self.tabs.addTab(self.task_history_tab, "Task History")
         self.tabs.addTab(self.task_editor_tab, "Task Editor")
         self.tabs.addTab(self.training_tab, "Training")
+        self.tabs.addTab(self.evaluation_tab, "Evaluation")
         self.tabs.addTab(self.episode_tab, "Episode Inspector")
 
         root.addWidget(self.tabs, 1)
@@ -96,6 +101,7 @@ class MainWindow(QMainWindow):
         self.task_editor_view.task_changed.connect(self._on_task_changed)
         self.episode_view.create_task_from_moment_requested.connect(self._on_derive_task_from_episode_moment)
         self.history_view.inspect_episode_requested.connect(self._inspect_episode_from_history)
+        self.history_view.checkpoint_import_requested.connect(self._on_checkpoint_import_requested)
 
         self.training_view.start_requested.connect(self._start_training)
         self.training_view.pause_requested.connect(self._training_service.pause)
@@ -123,6 +129,7 @@ class MainWindow(QMainWindow):
 
         self._current_plugin = plugin
         self._task_workspace = tasks
+        self.evaluation_view.set_tasks(self._task_workspace)
         self._refresh_task_history_view(selected_workspace_index=0, preserve_multi_selection=False)
         self._select_task_index(0, sync_task_history=True, preserve_graph_multi_selection=False)
         self.episode_view.clear_episodes()
@@ -222,6 +229,7 @@ class MainWindow(QMainWindow):
         elif primary_task in selected_tasks:
             selected_tasks = [primary_task] + [task for task in selected_tasks if task is not primary_task]
 
+        config.evaluation_policy = self.evaluation_view.build_evaluation_policy()
         self.episode_view.clear_episodes()
         try:
             if len(selected_tasks) > 1:
@@ -273,6 +281,14 @@ class MainWindow(QMainWindow):
         self.episode_view.focus_episode(trace)
         self.tabs.setCurrentWidget(self.episode_tab)
         self.statusBar().showMessage(f"Inspecting episode {trace.episode_id} from {trace.run_id or 'unknown run'}")
+
+    def _on_checkpoint_import_requested(self, checkpoint: Checkpoint) -> None:
+        try:
+            self._training_service.import_checkpoint(checkpoint)
+        except RuntimeError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+        self.statusBar().showMessage(f"Imported checkpoint: {checkpoint.checkpoint_id}")
 
     def _refresh_history_view(self) -> None:
         self.history_view.set_history(self._training_service.history_snapshot(deep=False))
@@ -328,6 +344,7 @@ class MainWindow(QMainWindow):
         preserve_multi_selection: bool,
     ) -> None:
         self.task_history_view.set_tasks(self._task_workspace)
+        self.evaluation_view.set_tasks(self._task_workspace)
         if selected_workspace_index is not None:
             self.task_history_view.set_primary_workspace_index(
                 selected_workspace_index,

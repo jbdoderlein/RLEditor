@@ -211,6 +211,10 @@ def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() 
     )
     window._add_task_to_workspace(second_task, select=False)
     window._add_task_to_workspace(third_task, select=False)
+    window.evaluation_view.set_tasks(window._task_workspace)
+    window.evaluation_view.task_combo.setCurrentIndex(2)
+    window.evaluation_view.episode_count_spin.setValue(4)
+    window.evaluation_view.max_steps_per_episode_spin.setValue(77)
 
     window.task_history_view.set_primary_workspace_index(1, preserve_multi_selection=False, emit_signal=True)
     window.task_history_view.toggle_workspace_index_selection(2, emit_signal=True)
@@ -228,3 +232,7 @@ def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() 
 
     assert captured["tasks"] == [second_task, third_task]
     assert isinstance(captured["config"], RunConfig)
+    config = captured["config"]
+    assert config.evaluation_policy["task"]["task_id"] == "task_third"
+    assert config.evaluation_policy["episode_count"] == 4
+    assert config.evaluation_policy["max_steps_per_episode"] == 77

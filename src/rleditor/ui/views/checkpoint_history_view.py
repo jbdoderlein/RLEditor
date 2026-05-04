@@ -374,6 +374,7 @@ class CheckpointGraphWidget(QWidget):
 
 class CheckpointHistoryView(QWidget):
     inspect_episode_requested = Signal(object)
+    checkpoint_import_requested = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -419,6 +420,15 @@ class CheckpointHistoryView(QWidget):
             "Export the ordered curriculum without full episode step/moment traces."
         )
         self.export_curriculum_without_traces_button.setEnabled(False)
+        self.export_checkpoint_button = QPushButton("Export Checkpoint", right_panel)
+        self.export_checkpoint_button.setToolTip(
+            "Export only the selected checkpoint JSON."
+        )
+        self.export_checkpoint_button.setEnabled(False)
+        self.import_checkpoint_button = QPushButton("Import Checkpoint", right_panel)
+        self.import_checkpoint_button.setToolTip(
+            "Import one checkpoint JSON into the current history."
+        )
         self.selection_label = QLabel("Select a training edge to inspect a run.")
         self.selection_label.setWordWrap(True)
 
@@ -429,14 +439,14 @@ class CheckpointHistoryView(QWidget):
         self.checkpoint_details.setMinimumHeight(80)
         checkpoint_layout.addRow(self.checkpoint_details)
 
-        segment_group = QGroupBox("Training Run", right_panel)
-        segment_layout = QVBoxLayout(segment_group)
-        self.segment_details = QTextEdit(segment_group)
+        self.segment_group = QGroupBox("Run Episodes", right_panel)
+        segment_layout = QVBoxLayout(self.segment_group)
+        self.segment_details = QTextEdit(self.segment_group)
         self.segment_details.setReadOnly(True)
         self.segment_details.setMinimumHeight(80)
-        self.episode_list = QListWidget(segment_group)
+        self.episode_list = QListWidget(self.segment_group)
         self.episode_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.inspect_episode_button = QPushButton("Inspect Selected Episode", segment_group)
+        self.inspect_episode_button = QPushButton("Inspect Selected Episode", self.segment_group)
         self.inspect_episode_button.setEnabled(False)
 
         segment_layout.addWidget(self.segment_details)
@@ -446,12 +456,14 @@ class CheckpointHistoryView(QWidget):
         export_buttons_layout = QHBoxLayout()
         export_buttons_layout.addWidget(self.export_curriculum_button)
         export_buttons_layout.addWidget(self.export_curriculum_without_traces_button)
+        export_buttons_layout.addWidget(self.export_checkpoint_button)
+        export_buttons_layout.addWidget(self.import_checkpoint_button)
 
         right_layout.addWidget(self.training_source_label)
         right_layout.addLayout(export_buttons_layout)
         right_layout.addWidget(self.selection_label)
         right_layout.addWidget(checkpoint_group)
-        right_layout.addWidget(segment_group, 1)
+        right_layout.addWidget(self.segment_group, 1)
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
@@ -471,6 +483,8 @@ class CheckpointHistoryView(QWidget):
         self.export_curriculum_without_traces_button.clicked.connect(
             lambda _checked=False: self._export_selected_curriculum(include_episode_traces=False)
         )
+        self.export_checkpoint_button.clicked.connect(self._export_selected_checkpoint)
+        self.import_checkpoint_button.clicked.connect(self._import_checkpoint_from_file)
 
         self._render_empty_selection()
 
@@ -519,7 +533,8 @@ class CheckpointHistoryView(QWidget):
                 self._show_edge_details(edge)
                 return
 
-        self._render_empty_segment_selection()
+        if resolved_node is None or resolved_node.kind == "root":
+            self._render_empty_segment_selection()
 
     def _render_empty_selection(self) -> None:
         if self._snapshot.checkpoints:
@@ -537,6 +552,7 @@ class CheckpointHistoryView(QWidget):
                 empty_message="Checkpoint or root-node details will appear here.",
             )
         )
+        self.segment_group.setTitle("Run Episodes")
         self.segment_details.setPlainText("Training run details and recorded episodes will appear here.")
         self.episode_list.clear()
         self._current_segment_episodes = []
@@ -544,6 +560,7 @@ class CheckpointHistoryView(QWidget):
         self._set_export_buttons_enabled(False)
 
     def _render_empty_segment_selection(self) -> None:
+        self.segment_group.setTitle("Run Episodes")
         self.selection_label.setText("Select a training edge to inspect a run.")
         self.segment_details.setPlainText("Training run details and recorded episodes will appear here.")
         self.episode_list.clear()
@@ -567,12 +584,10 @@ class CheckpointHistoryView(QWidget):
         self.training_source_label.setText(f"Training start checkpoint: {checkpoint.label}")
         self._set_checkpoint_details(checkpoint, heading="Selected checkpoint")
         self._set_export_buttons_enabled(True)
-        self.segment_details.setPlainText("Select a training edge to inspect the run that produced this checkpoint.")
-        self.episode_list.clear()
-        self._current_segment_episodes = []
-        self.inspect_episode_button.setEnabled(False)
+        self._set_checkpoint_evaluation_episodes(checkpoint)
 
     def _show_edge_details(self, edge: _LineageEdge) -> None:
+        self.segment_group.setTitle("Training Run")
         checkpoint = edge.target_checkpoint
         task_snapshot = edge.task_snapshot or checkpoint.task_snapshot
         task_name = task_snapshot.task_name if task_snapshot is not None else (checkpoint.task_name or "unknown")
@@ -621,6 +636,57 @@ class CheckpointHistoryView(QWidget):
         else:
             self.inspect_episode_button.setEnabled(False)
 
+    def _set_checkpoint_evaluation_episodes(self, checkpoint: Checkpoint) -> None:
+        self.segment_group.setTitle("Evaluation Episodes")
+        evaluation = checkpoint.metadata.get("evaluation")
+        evaluation_error = checkpoint.metadata.get("evaluation_error")
+        episodes = self._evaluation_episodes_for_checkpoint(checkpoint)
+        self.episode_list.clear()
+        self._current_segment_episodes = list(episodes)
+
+        if isinstance(evaluation, dict):
+            lines = [
+                f"Evaluation run ID: {evaluation.get('run_id', 'unknown')}",
+                f"Task: {evaluation.get('task_name', 'unknown')}",
+                f"Environment: {evaluation.get('environment_id', 'unknown')}",
+                f"Episodes requested: {evaluation.get('episode_count', 'unknown')}",
+                f"Max steps / episode: {evaluation.get('max_steps_per_episode') or 'no limit'}",
+                f"Recorded evaluation episodes: {len(episodes)}",
+            ]
+        elif evaluation_error is not None:
+            lines = [
+                "Evaluation failed for this checkpoint.",
+                f"Error: {evaluation_error}",
+            ]
+        else:
+            lines = [
+                "No evaluation is attached to this checkpoint.",
+                "Select the training edge to inspect recorded training episodes.",
+            ]
+        self.segment_details.setPlainText("\n".join(lines))
+
+        for trace in self._current_segment_episodes:
+            self.episode_list.addItem(
+                QListWidgetItem(
+                    f"Evaluation episode {trace.episode_id} | reward={trace.total_reward:.2f} | success={trace.success}"
+                )
+            )
+
+        if self._current_segment_episodes:
+            self.episode_list.setCurrentRow(0)
+            self.inspect_episode_button.setEnabled(True)
+        else:
+            self.inspect_episode_button.setEnabled(False)
+
+    def _evaluation_episodes_for_checkpoint(self, checkpoint: Checkpoint) -> list[EpisodeTrace]:
+        evaluation = checkpoint.metadata.get("evaluation")
+        if not isinstance(evaluation, dict):
+            return []
+        run_id = evaluation.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            return []
+        return list(self._snapshot.episodes_by_run.get(run_id, []))
+
     def _on_episode_selection_changed(self, row: int) -> None:
         self.inspect_episode_button.setEnabled(0 <= row < len(self._current_segment_episodes))
 
@@ -633,6 +699,7 @@ class CheckpointHistoryView(QWidget):
     def _set_export_buttons_enabled(self, enabled: bool) -> None:
         self.export_curriculum_button.setEnabled(enabled)
         self.export_curriculum_without_traces_button.setEnabled(enabled)
+        self.export_checkpoint_button.setEnabled(enabled)
 
     def _export_selected_curriculum(self, *, include_episode_traces: bool) -> None:
         checkpoint = self._selected_export_checkpoint()
@@ -679,6 +746,71 @@ class CheckpointHistoryView(QWidget):
             f"Curriculum exported to:\n{path}",
         )
 
+    def _export_selected_checkpoint(self) -> None:
+        checkpoint = self._selected_export_checkpoint()
+        if checkpoint is None:
+            QMessageBox.warning(
+                self,
+                "Export Checkpoint",
+                "Select a checkpoint before exporting.",
+            )
+            return
+
+        default_path = f"{checkpoint.checkpoint_id}.json"
+        selected_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Checkpoint",
+            default_path,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected_path:
+            return
+
+        path = Path(selected_path).expanduser()
+        if path.suffix == "":
+            path = path.with_suffix(".json")
+
+        payload = self._checkpoint_export_payload(checkpoint)
+        try:
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Export Checkpoint",
+                f"Could not write checkpoint export:\n{exc}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Export Checkpoint",
+            f"Checkpoint exported to:\n{path}",
+        )
+
+    def _import_checkpoint_from_file(self) -> None:
+        selected_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Import Checkpoint",
+            "",
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected_path:
+            return
+
+        path = Path(selected_path).expanduser()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            checkpoint = self._checkpoint_from_import_payload(payload)
+        except (OSError, TypeError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                "Import Checkpoint",
+                f"Could not import checkpoint:\n{exc}",
+            )
+            return
+
+        self.checkpoint_import_requested.emit(checkpoint)
+
     def _selected_export_checkpoint(self) -> Checkpoint | None:
         selected_edge_id = self.graph_widget.selected_edge_id
         if selected_edge_id is not None:
@@ -686,6 +818,17 @@ class CheckpointHistoryView(QWidget):
             if edge is not None:
                 return edge.target_checkpoint
         return self.selected_checkpoint()
+
+    def _checkpoint_export_payload(self, checkpoint: Checkpoint) -> dict[str, object]:
+        return checkpoint.to_dict()
+
+    def _checkpoint_from_import_payload(self, payload: object) -> Checkpoint:
+        if not isinstance(payload, dict):
+            raise ValueError("Checkpoint import file must contain a JSON object.")
+        checkpoint = Checkpoint.from_dict(payload)
+        if not checkpoint.checkpoint_id:
+            raise ValueError("Checkpoint import is missing checkpoint_id.")
+        return checkpoint
 
     def _curriculum_export_payload(
         self,
@@ -868,7 +1011,24 @@ class CheckpointHistoryView(QWidget):
             ("Step", str(checkpoint.step)),
             ("Parent checkpoint", checkpoint.parent_checkpoint_id or "scratch"),
         ]
-        metrics = checkpoint.metadata.get("training_metrics")
+        evaluation = checkpoint.metadata.get("evaluation")
+        if isinstance(evaluation, dict):
+            rows.extend(
+                [
+                    ("Evaluation task", str(evaluation.get("task_name", "unknown"))),
+                    ("Evaluation run ID", str(evaluation.get("run_id", "unknown"))),
+                    ("Evaluation episodes", str(evaluation.get("episode_count", "unknown"))),
+                ]
+            )
+        evaluation_error = checkpoint.metadata.get("evaluation_error")
+        if evaluation_error is not None:
+            rows.append(("Evaluation error", str(evaluation_error)))
+
+        metrics = checkpoint.metadata.get("evaluation_metrics")
+        metrics_heading = "Evaluation metrics"
+        if not isinstance(metrics, dict) or not metrics:
+            metrics = checkpoint.metadata.get("training_metrics")
+            metrics_heading = "Recorded training metrics"
         metric_rows: list[tuple[str, str]] = []
         if isinstance(metrics, dict) and metrics:
             metric_rows = [
@@ -887,7 +1047,7 @@ class CheckpointHistoryView(QWidget):
             self._details_panel_html(
                 heading=heading,
                 rows=rows,
-                metrics_heading="Recorded training metrics",
+                metrics_heading=metrics_heading,
                 metric_rows=metric_rows,
                 metrics_empty_message="No performance snapshot is available for this checkpoint.",
             )

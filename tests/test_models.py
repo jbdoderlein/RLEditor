@@ -108,6 +108,28 @@ def test_run_config_supports_unlimited_max_steps() -> None:
     assert restored.max_steps is None
 
 
+def test_run_config_roundtrip_preserves_evaluation_policy() -> None:
+    config = RunConfig(
+        max_steps=100,
+        evaluation_policy={
+            "task": {
+                "environment_id": "frozen_lake",
+                "name": "Evaluation Task",
+                "task_id": "task_eval",
+            },
+            "episode_count": 20,
+            "max_steps_per_episode": 500,
+            "trace_sample_rate": 1.0,
+        },
+    )
+
+    restored = RunConfig.from_dict(config.to_dict())
+
+    assert restored.evaluation_policy["task"]["task_id"] == "task_eval"
+    assert restored.evaluation_policy["episode_count"] == 20
+    assert restored.evaluation_policy["max_steps_per_episode"] == 500
+
+
 def test_episode_trace_roundtrip_preserves_task_snapshot_and_initial_observation() -> None:
     trace = EpisodeTrace(
         episode_id=3,

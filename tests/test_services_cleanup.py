@@ -27,6 +27,7 @@ from rleditor.core.models import (
 )
 from rleditor.infra.training_runner import TrainingRunner
 from rleditor.plugins.base import EnvironmentPlugin
+from rleditor.plugins.builtin.frozen_lake import build_frozen_lake_plugin
 from rleditor.plugins.registry import PluginRegistry
 
 
@@ -257,6 +258,12 @@ def _sb3_registry() -> PluginRegistry:
             gui_extension=None,
         )
     )
+    return registry
+
+
+def _frozen_lake_registry() -> PluginRegistry:
+    registry = PluginRegistry()
+    registry.register_environment(build_frozen_lake_plugin())
     return registry
 
 
@@ -604,6 +611,43 @@ def test_training_service_exposes_checkpoint_history_snapshot() -> None:
     assert checkpoint.metadata["training_metrics"]["episode"] == 1
 
 
+def test_training_service_evaluates_checkpoint_with_recorded_traces() -> None:
+    service = TrainingService(_history_registry())
+    task = TaskDefinition(environment_id="tiny_env", name="Training Task", task_id="task_train")
+    evaluation_task = TaskDefinition(environment_id="tiny_env", name="Evaluation Task", task_id="task_eval")
+    config = RunConfig(
+        max_steps=20,
+        max_episodes=1,
+        seed=23,
+        evaluation_policy={
+            "task": evaluation_task.to_dict(),
+            "episode_count": 2,
+            "max_steps_per_episode": 5,
+            "trace_sample_rate": 1.0,
+        },
+    )
+
+    service.start(task, config)
+    for _ in range(10):
+        service._runner._on_tick()
+        if service.status == TrainingStatus.FINISHED:
+            break
+
+    snapshot = service.history_snapshot()
+    checkpoint = snapshot.checkpoints[-1]
+    evaluation = checkpoint.metadata["evaluation"]
+    evaluation_run_id = evaluation["run_id"]
+    evaluation_episodes = snapshot.episodes_by_run[evaluation_run_id]
+
+    assert checkpoint.metadata["evaluation_metrics"]["episode"] == 2
+    assert checkpoint.metadata["evaluation_metrics"]["success_rate"] == 1.0
+    assert evaluation["task_name"] == "Evaluation Task"
+    assert evaluation["max_steps_per_episode"] == 5
+    assert len(evaluation_episodes) == 2
+    assert all(trace.metadata["runner"] == "evaluation" for trace in evaluation_episodes)
+    assert all(len(trace.moments) == len(trace.steps) + 1 for trace in evaluation_episodes)
+
+
 def test_training_service_raises_without_simulated_fallback_for_unknown_env() -> None:
     service = TrainingService(_history_registry())
     task = TaskDefinition(environment_id="missing_env", name="Missing Env Task", task_id="task_missing")
@@ -805,6 +849,39 @@ def test_training_service_keeps_checkpoint_learner_state_in_memory_for_project_s
     assert checkpoint.metadata["learner_state"]["q_values"]
 
 
+def test_training_service_imports_checkpoint_and_rejects_duplicate_ids() -> None:
+    service = TrainingService(_history_registry())
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_009",
+        label="Imported Checkpoint",
+        created_at="2026-05-04 10:00:00",
+        reason="imported",
+        run_id="run_imported",
+        task_snapshot=TaskSnapshot(
+            environment_id="tiny_env",
+            task_name="Imported Tiny Task",
+            task_id="task_imported",
+        ),
+        metadata={
+            "algorithm": "q_learning",
+            "learner_state": {
+                "algorithm": "q_learning",
+                "q_values": [],
+            },
+        },
+    )
+
+    service.import_checkpoint(checkpoint)
+    snapshot = service.history_snapshot()
+
+    assert snapshot.checkpoints[-1].checkpoint_id == "checkpoint_009"
+    assert service._checkpoint_counter == 9
+    assert snapshot.run_task_snapshots["run_imported"].task_name == "Imported Tiny Task"
+
+    with pytest.raises(RuntimeError, match="already exists"):
+        service.import_checkpoint(checkpoint)
+
+
 def test_training_service_can_start_from_selected_checkpoint_instead_of_latest() -> None:
     service = TrainingService(_history_registry())
     config = RunConfig(max_steps=20, max_episodes=1, seed=41)
@@ -897,6 +974,12 @@ def test_training_service_can_run_stable_baselines3_dqn_backend() -> None:
         algorithm="sb3_dqn",
         max_steps=6,
         seed=71,
+        evaluation_policy={
+            "task": task.to_dict(),
+            "episode_count": 1,
+            "max_steps_per_episode": 4,
+            "trace_sample_rate": 1.0,
+        },
         episode_trace_sample_rate=1.0,
         hyperparameters={
             "learning_starts": 0,
@@ -920,7 +1003,58 @@ def test_training_service_can_run_stable_baselines3_dqn_backend() -> None:
     assert snapshot.runs[-1].metadata["run_config"]["algorithm"] == "sb3_dqn"
     assert snapshot.checkpoints[-1].metadata["algorithm"] == "sb3_dqn"
     assert snapshot.checkpoints[-1].metadata["learner_state"]["backend"] == "stable_baselines3"
+    assert snapshot.checkpoints[-1].metadata["evaluation_metrics"]["episode"] == 1
+    assert snapshot.episodes_by_run[snapshot.checkpoints[-1].metadata["evaluation"]["run_id"]]
     assert snapshot.episodes_by_run[snapshot.runs[-1].run_id]
+
+
+def test_training_service_evaluates_sb3_dqn_on_frozen_lake_discrete_actions() -> None:
+    service = TrainingService(_frozen_lake_registry())
+    task = TaskDefinition(
+        environment_id="frozen_lake",
+        name="Frozen Lake Eval Regression",
+        task_id="task_frozen_lake_eval_regression",
+        config={
+            "map_desc": [
+                "SFG",
+                "FFF",
+                "FFF",
+            ],
+            "is_slippery": False,
+            "success_rate": 1.0,
+        },
+    )
+    config = RunConfig(
+        algorithm="sb3_dqn",
+        max_steps=4,
+        seed=89,
+        episode_trace_sample_rate=0.0,
+        evaluation_policy={
+            "task": task.to_dict(),
+            "episode_count": 1,
+            "max_steps_per_episode": 3,
+            "trace_sample_rate": 1.0,
+        },
+        hyperparameters={
+            "learning_starts": 0,
+            "buffer_size": 32,
+            "batch_size": 1,
+            "train_freq": 1,
+            "gradient_steps": 1,
+            "target_update_interval": 4,
+            "exploration_fraction": 0.2,
+            "exploration_initial_eps": 1.0,
+            "exploration_final_eps": 0.05,
+        },
+    )
+
+    service.start(task, config, run_in_background=True)
+
+    _wait_for(lambda: service.status == TrainingStatus.FINISHED, timeout_seconds=10.0)
+    checkpoint = service.history_snapshot().checkpoints[-1]
+
+    assert "evaluation_error" not in checkpoint.metadata
+    assert checkpoint.metadata["evaluation_metrics"]["episode"] == 1
 
 
 def test_training_service_can_run_stable_baselines3_ppo_backend() -> None:
@@ -934,6 +1068,12 @@ def test_training_service_can_run_stable_baselines3_ppo_backend() -> None:
         algorithm="sb3_ppo",
         max_steps=8,
         seed=83,
+        evaluation_policy={
+            "task": task.to_dict(),
+            "episode_count": 1,
+            "max_steps_per_episode": 4,
+            "trace_sample_rate": 1.0,
+        },
         episode_trace_sample_rate=1.0,
         hyperparameters={
             "n_steps": 4,
@@ -952,6 +1092,7 @@ def test_training_service_can_run_stable_baselines3_ppo_backend() -> None:
     assert run.metadata["algorithm"] == "sb3_ppo"
     assert snapshot.checkpoints[-1].metadata["algorithm"] == "sb3_ppo"
     assert snapshot.checkpoints[-1].metadata["learner_state"]["backend"] == "stable_baselines3"
+    assert snapshot.checkpoints[-1].metadata["evaluation_metrics"]["episode"] == 1
     assert isinstance(episode.steps[-1].action, list)
 
 
