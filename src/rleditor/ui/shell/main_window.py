@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections import deque
 from copy import deepcopy
+from typing import Any
 
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QFrame,
+    QLabel,
     QMainWindow,
     QPushButton,
     QScrollArea,
@@ -54,6 +58,13 @@ class MainWindow(QMainWindow):
         self._current_plugin: EnvironmentPlugin | None = None
         self._current_task: TaskDefinition | None = None
         self._task_workspace: list[TaskDefinition] = []
+        self._imported_curriculum_queue: deque[tuple[TaskDefinition, RunConfig]] = deque()
+        self._imported_curriculum_active = False
+        self._imported_curriculum_waiting_for_step = False
+        self._imported_curriculum_completed_steps = 0
+        self._status_busy_sources: set[str] = set()
+        self._status_busy_frames = ("|", "/", "-", "\\")
+        self._status_busy_frame_index = 0
 
         self.setWindowTitle("RL Debug Studio")
         self._build_ui()
@@ -90,6 +101,28 @@ class MainWindow(QMainWindow):
 
         root.addWidget(self.tabs, 1)
         self.setCentralWidget(surface)
+        self.statusBar().setStyleSheet(
+            """
+            QStatusBar {
+                font-size: 14px;
+            }
+
+            QLabel#StatusBusyIndicator {
+                color: #0f766e;
+                font-size: 15px;
+                font-weight: 700;
+            }
+            """
+        )
+        self.status_busy_indicator = QLabel("", self)
+        self.status_busy_indicator.setObjectName("StatusBusyIndicator")
+        self.status_busy_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_busy_indicator.setFixedWidth(18)
+        self.status_busy_indicator.setVisible(False)
+        self._status_busy_timer = QTimer(self)
+        self._status_busy_timer.setInterval(120)
+        self._status_busy_timer.timeout.connect(self._advance_status_busy_indicator)
+        self.statusBar().addWidget(self.status_busy_indicator)
         self.save_project_btn = QPushButton("Save Project", self)
         self.save_project_btn.setEnabled(self._project_store is not None)
         self.save_project_btn.setToolTip("Write the current task workspace and training history to disk.")
@@ -106,6 +139,7 @@ class MainWindow(QMainWindow):
         self.history_view.inspect_episode_requested.connect(self._inspect_episode_from_history)
         self.history_view.checkpoint_import_requested.connect(self._on_checkpoint_import_requested)
         self.history_view.checkpoint_evaluation_requested.connect(self._on_checkpoint_evaluation_requested)
+        self.history_view.curriculum_import_requested.connect(self._on_curriculum_import_requested)
 
         self.training_view.start_requested.connect(self._start_training)
         self.training_view.pause_requested.connect(self._training_service.pause)
@@ -254,11 +288,26 @@ class MainWindow(QMainWindow):
                     run_in_background=True,
                 )
                 self.statusBar().showMessage("Training started")
+            self._set_status_busy("training", True)
         except RuntimeError as exc:
             self.statusBar().showMessage(str(exc))
 
     def _on_status_changed(self, status: TrainingStatus) -> None:
         self.training_view.set_status(status)
+        self._set_status_busy("training", status == TrainingStatus.RUNNING)
+        if not self._imported_curriculum_active or not self._imported_curriculum_waiting_for_step:
+            return
+        if status == TrainingStatus.FINISHED:
+            self._imported_curriculum_waiting_for_step = False
+            QTimer.singleShot(0, self._start_next_imported_curriculum_step)
+        elif status == TrainingStatus.STOPPED:
+            self._imported_curriculum_queue.clear()
+            self._imported_curriculum_active = False
+            self._imported_curriculum_waiting_for_step = False
+            self._set_status_busy("curriculum", False)
+            self.statusBar().showMessage("Curriculum execution stopped")
+        elif status == TrainingStatus.PAUSED:
+            self._set_status_busy("curriculum", False)
 
     def _on_metrics_updated(self, metrics: TrainingMetrics) -> None:
         self.training_view.set_metrics(metrics)
@@ -300,6 +349,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Cannot evaluate checkpoint: no evaluation task selected")
             return
         try:
+            self._set_status_busy("evaluation", True)
             evaluated_checkpoint = self._training_service.evaluate_checkpoint(
                 checkpoint.checkpoint_id,
                 policy,
@@ -307,7 +357,40 @@ class MainWindow(QMainWindow):
         except RuntimeError as exc:
             self.statusBar().showMessage(str(exc))
             return
+        finally:
+            self._set_status_busy("evaluation", False)
         self.statusBar().showMessage(f"Evaluation completed for {evaluated_checkpoint.checkpoint_id}")
+
+    def _on_curriculum_import_requested(self, payload: object) -> None:
+        try:
+            imported_tasks, curriculum_steps = self._curriculum_from_import_payload(payload)
+        except ValueError as exc:
+            self.statusBar().showMessage(f"Cannot import curriculum: {exc}")
+            return
+        if self._training_service.status in {TrainingStatus.RUNNING, TrainingStatus.PAUSED}:
+            self.statusBar().showMessage("Cannot import curriculum while training is running")
+            return
+
+        self._task_workspace.extend(imported_tasks)
+        selected_index = len(self._task_workspace) - len(imported_tasks) if imported_tasks else None
+        self._refresh_task_history_view(
+            selected_workspace_index=selected_index,
+            preserve_multi_selection=False,
+        )
+        if selected_index is not None:
+            self._select_task_index(
+                selected_index,
+                sync_task_history=True,
+                preserve_graph_multi_selection=False,
+            )
+
+        self._imported_curriculum_queue = deque(curriculum_steps)
+        self._imported_curriculum_active = True
+        self._imported_curriculum_waiting_for_step = False
+        self._imported_curriculum_completed_steps = 0
+        self._set_status_busy("curriculum", True)
+        self.episode_view.clear_episodes()
+        self._start_next_imported_curriculum_step()
 
     def _refresh_history_view(self) -> None:
         self.history_view.set_history(self._training_service.history_snapshot(deep=False))
@@ -407,6 +490,259 @@ class MainWindow(QMainWindow):
         self._add_task_to_workspace(task, select=True)
         self.statusBar().showMessage(f"Copied task: {task.name}")
 
+    def _curriculum_from_import_payload(
+        self,
+        payload: object,
+    ) -> tuple[list[TaskDefinition], list[tuple[TaskDefinition, RunConfig]]]:
+        if not isinstance(payload, dict):
+            raise ValueError("Curriculum import must be a JSON object.")
+        curriculum = payload.get("curriculum")
+        if not isinstance(curriculum, dict):
+            raise ValueError("Missing curriculum object.")
+        raw_steps = curriculum.get("steps")
+        if not isinstance(raw_steps, list) or not raw_steps:
+            raise ValueError("Curriculum must contain at least one step.")
+        raw_environments = payload.get("environments")
+        if not isinstance(raw_environments, list) or not raw_environments:
+            raise ValueError("Curriculum must contain environments.")
+
+        imported_tasks, tasks_by_ref = self._tasks_from_curriculum_environments(raw_environments)
+        global_seed = self._optional_int(curriculum.get("seed"))
+        evaluation_policy = self._evaluation_policy_from_curriculum_payload(payload, tasks_by_ref)
+
+        curriculum_steps: list[tuple[TaskDefinition, RunConfig]] = []
+        for index, raw_step in enumerate(raw_steps):
+            if not isinstance(raw_step, dict):
+                raise ValueError(f"Curriculum step {index + 1} must be an object.")
+            env_ref = raw_step.get("env_id", raw_step.get("environment_id"))
+            task = tasks_by_ref.get(str(env_ref))
+            if task is None:
+                raise ValueError(f"Curriculum step {index + 1} references unknown env_id: {env_ref}")
+            config = self._run_config_from_curriculum_step(raw_step, fallback_seed=global_seed)
+            if evaluation_policy:
+                config.evaluation_policy = deepcopy(evaluation_policy)
+            curriculum_steps.append((task, config))
+
+        return imported_tasks, curriculum_steps
+
+    def _tasks_from_curriculum_environments(
+        self,
+        environments: list[object],
+    ) -> tuple[list[TaskDefinition], dict[str, TaskDefinition]]:
+        imported_tasks: list[TaskDefinition] = []
+        tasks_by_ref: dict[str, TaskDefinition] = {}
+        existing_names = {task.name for task in self._task_workspace}
+
+        for index, raw_environment in enumerate(environments):
+            if not isinstance(raw_environment, dict):
+                raise ValueError(f"Environment entry {index + 1} must be an object.")
+            task = self._task_from_curriculum_environment(raw_environment)
+            task.name = self._unique_task_name_from_set(task.name, existing_names)
+            existing_names.add(task.name)
+            imported_tasks.append(task)
+
+            raw_task_id = raw_environment.get("task_id", index)
+            tasks_by_ref[str(raw_task_id)] = task
+            tasks_by_ref[str(index)] = task
+
+        return imported_tasks, tasks_by_ref
+
+    def _task_from_curriculum_environment(self, payload: dict[str, Any]) -> TaskDefinition:
+        metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+        raw_task_id = payload.get("task_id")
+        if raw_task_id is not None:
+            metadata.setdefault("curriculum_env_id", raw_task_id)
+        task_kwargs = {
+            "environment_id": str(payload.get("environment_id", "")),
+            "name": str(payload.get("task_name", payload.get("name", "Imported Task"))),
+            "task_id": None,
+            "config": self._dict_payload(payload.get("task_config", payload.get("config", {}))),
+            "reward_config": self._dict_payload(payload.get("reward_config", {})),
+            "termination_config": self._dict_payload(payload.get("termination_config", {})),
+            "metadata": metadata,
+        }
+        if any(
+            key in payload
+            for key in {
+                "derived_task_id",
+                "parent_task_id",
+                "derivation_reason",
+                "source_episode_id",
+                "source_moment_index",
+                "source_run_id",
+                "start_state",
+                "goal_state",
+            }
+        ):
+            return DerivedTaskDefinition(
+                **task_kwargs,
+                derived_task_id=payload.get("derived_task_id"),
+                parent_task_id=payload.get("parent_task_id"),
+                derivation_reason=payload.get("derivation_reason"),
+                source_episode_id=self._optional_int(payload.get("source_episode_id")),
+                source_moment_index=self._optional_int(payload.get("source_moment_index")),
+                source_run_id=payload.get("source_run_id"),
+                start_state=payload.get("start_state"),
+                goal_state=payload.get("goal_state"),
+            )
+        return TaskDefinition(**task_kwargs)
+
+    def _run_config_from_curriculum_step(
+        self,
+        step: dict[str, Any],
+        *,
+        fallback_seed: int | None,
+    ) -> RunConfig:
+        run_config_payload = step.get("run_config")
+        if isinstance(run_config_payload, dict):
+            config = RunConfig.from_dict(run_config_payload)
+        else:
+            hyperparameters = dict(step.get("hyperparameters")) if isinstance(step.get("hyperparameters"), dict) else {}
+            if "epsilon_decay" in step:
+                hyperparameters["epsilon_decay"] = step["epsilon_decay"]
+            if "epsilon_min" in step:
+                hyperparameters["epsilon_min"] = step["epsilon_min"]
+            config = RunConfig.from_dict(
+                {
+                    "algorithm": self._normalize_curriculum_algorithm(step.get("algorithm", "q_learning")),
+                    "seed": self._optional_int(step.get("seed"), fallback=fallback_seed),
+                    "episode_trace_sample_rate": float(step.get("episode_trace_sample_rate", 0.0)),
+                    "max_steps": self._optional_int(step.get("steps", step.get("max_steps"))),
+                    "max_episodes": self._optional_int(step.get("max_episodes")),
+                    "max_steps_per_episode": self._optional_int(
+                        step.get("max_episode_length", step.get("max_steps_per_episode"))
+                    ),
+                    "max_duration_seconds": step.get("max_duration_seconds"),
+                    "learning_rate": float(step.get("learning_rate", step.get("lr", 0.1))),
+                    "gamma": float(step.get("discount_factor", step.get("gamma", 0.99))),
+                    "epsilon": float(step.get("epsilon_start", step.get("epsilon", 0.1))),
+                    "hyperparameters": hyperparameters,
+                    "breakpoints": step.get("breakpoints", []),
+                }
+            )
+        config.metadata["imported_curriculum_step"] = True
+        return config
+
+    def _evaluation_policy_from_curriculum_payload(
+        self,
+        payload: dict[str, Any],
+        tasks_by_ref: dict[str, TaskDefinition],
+    ) -> dict[str, object]:
+        evaluation = payload.get("evaluation")
+        if not isinstance(evaluation, dict):
+            return {}
+        env_ref = evaluation.get("evaluation_env", evaluation.get("evaluation_env_id"))
+        task = tasks_by_ref.get(str(env_ref))
+        if task is None:
+            return {}
+        episode_count = self._optional_int(evaluation.get("eval_episodes", evaluation.get("episode_count")))
+        if episode_count is None or episode_count <= 0:
+            return {}
+        return {
+            "task": task.to_dict(),
+            "episode_count": episode_count,
+            "max_steps_per_episode": self._optional_int(
+                evaluation.get("max_episode_length", evaluation.get("max_steps_per_episode"))
+            ),
+            "seed": self._optional_int(evaluation.get("eval_seed", evaluation.get("seed"))),
+            "trace_sample_rate": 1.0,
+        }
+
+    def _start_next_imported_curriculum_step(self) -> None:
+        if not self._imported_curriculum_active:
+            return
+        if not self._imported_curriculum_queue:
+            completed = self._imported_curriculum_completed_steps
+            self._imported_curriculum_active = False
+            self._imported_curriculum_waiting_for_step = False
+            self._set_status_busy("curriculum", False)
+            self.statusBar().showMessage(f"Curriculum execution completed: {completed} step(s)")
+            return
+
+        task, config = self._imported_curriculum_queue.popleft()
+        step_number = self._imported_curriculum_completed_steps + 1
+        start_from_scratch = step_number == 1
+        initial_checkpoint = None if start_from_scratch else self._latest_checkpoint()
+        self._imported_curriculum_waiting_for_step = True
+        try:
+            self._training_service.start(
+                task,
+                config,
+                initial_checkpoint=initial_checkpoint,
+                start_from_scratch=start_from_scratch,
+                run_in_background=True,
+            )
+        except RuntimeError as exc:
+            self._imported_curriculum_queue.clear()
+            self._imported_curriculum_active = False
+            self._imported_curriculum_waiting_for_step = False
+            self._set_status_busy("curriculum", False)
+            self.statusBar().showMessage(f"Curriculum execution failed: {exc}")
+            return
+
+        self._imported_curriculum_completed_steps = step_number
+        workspace_index = self._workspace_index_for_task(task)
+        if workspace_index is not None:
+            self.task_history_view.set_primary_workspace_index(
+                workspace_index,
+                preserve_multi_selection=False,
+                emit_signal=False,
+            )
+        self.statusBar().showMessage(
+            f"Curriculum step {step_number} started on task: {task.name}"
+        )
+
+    def _set_status_busy(self, source: str, busy: bool) -> None:
+        if busy:
+            self._status_busy_sources.add(source)
+        else:
+            self._status_busy_sources.discard(source)
+
+        if self._status_busy_sources:
+            if self.status_busy_indicator.isHidden():
+                self.status_busy_indicator.setText(self._status_busy_frames[self._status_busy_frame_index])
+                self.status_busy_indicator.setVisible(True)
+            if not self._status_busy_timer.isActive():
+                self._status_busy_timer.start()
+            return
+
+        self._status_busy_timer.stop()
+        self.status_busy_indicator.setVisible(False)
+        self.status_busy_indicator.setText("")
+
+    def _advance_status_busy_indicator(self) -> None:
+        if not self._status_busy_sources:
+            return
+        self._status_busy_frame_index = (self._status_busy_frame_index + 1) % len(self._status_busy_frames)
+        self.status_busy_indicator.setText(self._status_busy_frames[self._status_busy_frame_index])
+
+    def _latest_checkpoint(self) -> Checkpoint | None:
+        snapshot = self._training_service.history_snapshot(deep=False)
+        return snapshot.checkpoints[-1] if snapshot.checkpoints else None
+
+    def _normalize_curriculum_algorithm(self, value: object) -> str:
+        normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "q_learning": "q_learning",
+            "qlearning": "q_learning",
+            "stable_baselines3_dqn": "sb3_dqn",
+            "sb3_dqn": "sb3_dqn",
+            "stable_baselines3_ppo": "sb3_ppo",
+            "sb3_ppo": "sb3_ppo",
+        }
+        return aliases.get(normalized, str(value))
+
+    def _optional_int(self, value: object, *, fallback: int | None = None) -> int | None:
+        if value is None or value == "":
+            return fallback
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _dict_payload(self, value: object) -> dict[str, Any]:
+        return dict(value) if isinstance(value, dict) else {}
+
     def _on_save_project_requested(self) -> None:
         if self._save_project():
             assert self._project_store is not None
@@ -436,6 +772,9 @@ class MainWindow(QMainWindow):
 
     def _unique_task_name(self, base_name: str) -> str:
         existing = {task.name for task in self._task_workspace}
+        return self._unique_task_name_from_set(base_name, existing)
+
+    def _unique_task_name_from_set(self, base_name: str, existing: set[str]) -> str:
         if base_name not in existing:
             return base_name
         suffix = 2

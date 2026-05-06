@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -213,6 +214,9 @@ def test_checkpoint_history_view_parses_imported_checkpoint_payload() -> None:
 def test_checkpoint_history_view_builds_curriculum_export_for_selected_lineage() -> None:
     _app()
     view = CheckpointHistoryView()
+    assert view.export_curriculum_plan_button.text() == "Export Curriculum"
+    assert view.import_curriculum_button.text() == "Import Curriculum"
+    assert view.export_curriculum_button.text() == "Export Trace"
     main_task = TaskSnapshot(
         environment_id="frozen_lake",
         task_name="Main Task",
@@ -342,3 +346,23 @@ def test_checkpoint_history_view_builds_curriculum_export_for_selected_lineage()
     assert compact_training_runs[1]["recorded_episode_trace_count"] == 2
     assert "recorded_episode_traces" not in compact_training_runs[1]
     assert [trace["episode_id"] for trace in compact_training_runs[1]["recorded_episode_summaries"]] == [1, 3]
+
+    plan_payload = view._curriculum_plan_export_payload(checkpoint_2)
+    assert plan_payload["curriculum"]["size"] == 2
+    assert [environment["task_name"] for environment in plan_payload["environments"]] == [
+        "Main Task",
+        "Sub Task",
+    ]
+
+    plan_steps = plan_payload["curriculum"]["steps"]
+    assert plan_steps[0]["step_id"] == 1
+    assert plan_steps[0]["env_id"] == 0
+    assert plan_steps[0]["steps"] == 100
+    assert plan_steps[0]["algorithm"] == "q_learning"
+    assert plan_steps[1]["step_id"] == 2
+    assert plan_steps[1]["env_id"] == 1
+    assert plan_steps[1]["steps"] == 50
+
+    serialized_plan = json.dumps(plan_payload)
+    assert "recorded_episode" not in serialized_plan
+    assert "training_runs" not in plan_payload

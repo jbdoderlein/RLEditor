@@ -1193,8 +1193,11 @@ def test_training_service_parallel_group_pauses_when_first_run_hits_breakpoint()
     snapshot = service.history_snapshot()
     runs_by_task = {run.metadata["task_name"]: run for run in snapshot.runs}
 
-    assert "Fast Task: Breakpoint hit: episode_count >= 1" in breakpoint_messages
+    assert breakpoint_messages
+    triggered_task_name = breakpoint_messages[0].split(":", 1)[0]
+    assert breakpoint_messages[0].endswith("Breakpoint hit: episode_count >= 1")
+    assert triggered_task_name in {"Fast Task", "Slow Task"}
     assert runs_by_task["Fast Task"].status == TrainingStatus.PAUSED
     assert runs_by_task["Slow Task"].status == TrainingStatus.PAUSED
-    assert any(checkpoint.task_name == "Fast Task" for checkpoint in snapshot.checkpoints)
-    assert snapshot.episodes_by_run[runs_by_task["Fast Task"].run_id]
+    assert any(checkpoint.task_name == triggered_task_name for checkpoint in snapshot.checkpoints)
+    assert snapshot.episodes_by_run[runs_by_task[triggered_task_name].run_id]

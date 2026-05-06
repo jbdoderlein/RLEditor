@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 
 from rleditor.application.persistence import ProjectStore
 from rleditor.application.services import TaskService, TrainingService
-from rleditor.core.models import DerivedTaskDefinition, RunConfig, TaskDefinition
+from rleditor.core.models import DerivedTaskDefinition, RunConfig, TaskDefinition, TrainingStatus
 from rleditor.plugins.base import EnvironmentPlugin
 from rleditor.plugins.registry import PluginRegistry
 from rleditor.ui.shell.main_window import MainWindow
@@ -266,6 +266,146 @@ def test_task_history_copy_duplicates_selected_task() -> None:
     assert copied_task.task_id is None
     assert isinstance(copied_task, DerivedTaskDefinition)
     assert copied_task.parent_task_id == "task_main"
+
+
+def test_curriculum_import_adds_tasks_and_starts_first_step() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+    )
+    payload = {
+        "curriculum": {
+            "size": 2,
+            "seed": 42,
+            "steps": [
+                {
+                    "env_id": 0,
+                    "steps": 100,
+                    "max_episode_length": 12,
+                    "algorithm": "Q-learning",
+                    "learning_rate": 0.2,
+                    "discount_factor": 0.95,
+                    "epsilon_start": 0.3,
+                },
+                {
+                    "env_id": 1,
+                    "steps": 50,
+                    "algorithm": "q_learning",
+                },
+            ],
+        },
+        "evaluation": {
+            "evaluation_env": 0,
+            "eval_episodes": 5,
+            "eval_seed": 7,
+        },
+        "environments": [
+            {
+                "task_id": 0,
+                "environment_id": "dummy_env",
+                "task_name": "Imported Main",
+                "task_config": {"difficulty": 1},
+                "reward_config": {"goal": 1.0},
+                "metadata": {},
+            },
+            {
+                "task_id": 1,
+                "environment_id": "dummy_env",
+                "task_name": "Imported Sub",
+                "task_config": {"difficulty": 2},
+                "metadata": {},
+            },
+        ],
+    }
+    captured: dict[str, object] = {}
+
+    def _capture_start(task, config, **kwargs):
+        captured["task"] = task
+        captured["config"] = config
+        captured["kwargs"] = kwargs
+
+    training_service.start = _capture_start  # type: ignore[method-assign]
+
+    window._on_curriculum_import_requested(payload)
+
+    assert [task.name for task in window._task_workspace[-2:]] == ["Imported Main", "Imported Sub"]
+    assert captured["task"] is window._task_workspace[-2]
+    assert isinstance(captured["config"], RunConfig)
+    config = captured["config"]
+    assert config.algorithm == "q_learning"
+    assert config.seed == 42
+    assert config.max_steps == 100
+    assert config.max_steps_per_episode == 12
+    assert config.learning_rate == 0.2
+    assert config.gamma == 0.95
+    assert config.epsilon == 0.3
+    assert config.evaluation_policy["episode_count"] == 5
+    assert config.evaluation_policy["seed"] == 7
+    assert captured["kwargs"]["start_from_scratch"] is True
+    assert len(window._imported_curriculum_queue) == 1
+    queued_task, queued_config = window._imported_curriculum_queue[0]
+    assert queued_task is window._task_workspace[-1]
+    assert queued_config.evaluation_policy["episode_count"] == 5
+    assert queued_config.evaluation_policy["seed"] == 7
+
+
+def test_status_bar_busy_indicator_tracks_active_work() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+    )
+
+    assert "font-size: 14px" in window.statusBar().styleSheet()
+    assert window.status_busy_indicator.isHidden()
+
+    window._set_status_busy("training", True)
+
+    assert not window.status_busy_indicator.isHidden()
+    assert window._status_busy_timer.isActive()
+    first_frame = window.status_busy_indicator.text()
+
+    window._advance_status_busy_indicator()
+
+    assert window.status_busy_indicator.text() != first_frame
+
+    window._set_status_busy("training", False)
+
+    assert window.status_busy_indicator.isHidden()
+    assert not window._status_busy_timer.isActive()
+
+    window._set_status_busy("curriculum", True)
+    window._imported_curriculum_active = True
+    window._imported_curriculum_waiting_for_step = True
+    window._on_status_changed(TrainingStatus.PAUSED)
+
+    assert window.status_busy_indicator.isHidden()
 
 
 def test_project_is_saved_only_when_save_button_is_clicked(tmp_path) -> None:

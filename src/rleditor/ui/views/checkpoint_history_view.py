@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from rleditor.application.services import TrainingHistorySnapshot
-from rleditor.core.models import Checkpoint, EpisodeTrace, TaskSnapshot, TrainingRun
+from rleditor.core.models import Checkpoint, EpisodeTrace, RunConfig, TaskSnapshot, TrainingRun
 
 
 @dataclass(slots=True)
@@ -376,6 +376,7 @@ class CheckpointHistoryView(QWidget):
     inspect_episode_requested = Signal(object)
     checkpoint_import_requested = Signal(object)
     checkpoint_evaluation_requested = Signal(object)
+    curriculum_import_requested = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -411,16 +412,16 @@ class CheckpointHistoryView(QWidget):
 
         self.training_source_label = QLabel("Training start checkpoint: scratch")
         self.training_source_label.setWordWrap(True)
-        self.export_curriculum_button = QPushButton("Export", right_panel)
+        self.export_curriculum_button = QPushButton("Export Trace", right_panel)
         self.export_curriculum_button.setToolTip(
             "Export the ordered curriculum with recorded episode traces."
         )
         self.export_curriculum_button.setEnabled(False)
-        self.export_curriculum_without_traces_button = QPushButton("Export Without Traces", right_panel)
-        self.export_curriculum_without_traces_button.setToolTip(
-            "Export the ordered curriculum without full episode step/moment traces."
+        self.export_curriculum_plan_button = QPushButton("Export Curriculum", right_panel)
+        self.export_curriculum_plan_button.setToolTip(
+            "Export only the executable curriculum structure: tasks and training steps."
         )
-        self.export_curriculum_without_traces_button.setEnabled(False)
+        self.export_curriculum_plan_button.setEnabled(False)
         self.export_checkpoint_button = QPushButton("Export Checkpoint", right_panel)
         self.export_checkpoint_button.setToolTip(
             "Export only the selected checkpoint JSON."
@@ -434,6 +435,10 @@ class CheckpointHistoryView(QWidget):
         self.import_checkpoint_button = QPushButton("Import Checkpoint", right_panel)
         self.import_checkpoint_button.setToolTip(
             "Import one checkpoint JSON into the current history."
+        )
+        self.import_curriculum_button = QPushButton("Import Curriculum", right_panel)
+        self.import_curriculum_button.setToolTip(
+            "Import and execute a curriculum JSON."
         )
         self.selection_label = QLabel("Select a training edge to inspect a run.")
         self.selection_label.setWordWrap(True)
@@ -459,15 +464,28 @@ class CheckpointHistoryView(QWidget):
         segment_layout.addWidget(self.episode_list, 1)
         segment_layout.addWidget(self.inspect_episode_button)
 
-        export_buttons_layout = QHBoxLayout()
-        export_buttons_layout.addWidget(self.export_curriculum_button)
-        export_buttons_layout.addWidget(self.export_curriculum_without_traces_button)
-        export_buttons_layout.addWidget(self.export_checkpoint_button)
-        export_buttons_layout.addWidget(self.evaluate_checkpoint_button)
-        export_buttons_layout.addWidget(self.import_checkpoint_button)
+        actions_layout = QVBoxLayout()
+        plan_buttons_layout = QHBoxLayout()
+        plan_buttons_layout.addWidget(self.export_curriculum_plan_button)
+        plan_buttons_layout.addWidget(self.import_curriculum_button)
+        plan_buttons_layout.addStretch(1)
+
+        checkpoint_buttons_layout = QHBoxLayout()
+        checkpoint_buttons_layout.addWidget(self.export_checkpoint_button)
+        checkpoint_buttons_layout.addWidget(self.import_checkpoint_button)
+        checkpoint_buttons_layout.addStretch(1)
+
+        trace_buttons_layout = QHBoxLayout()
+        trace_buttons_layout.addWidget(self.export_curriculum_button)
+        trace_buttons_layout.addWidget(self.evaluate_checkpoint_button)
+        trace_buttons_layout.addStretch(1)
+
+        actions_layout.addLayout(plan_buttons_layout)
+        actions_layout.addLayout(checkpoint_buttons_layout)
+        actions_layout.addLayout(trace_buttons_layout)
 
         right_layout.addWidget(self.training_source_label)
-        right_layout.addLayout(export_buttons_layout)
+        right_layout.addLayout(actions_layout)
         right_layout.addWidget(self.selection_label)
         right_layout.addWidget(checkpoint_group)
         right_layout.addWidget(self.segment_group, 1)
@@ -487,12 +505,11 @@ class CheckpointHistoryView(QWidget):
         self.export_curriculum_button.clicked.connect(
             lambda _checked=False: self._export_selected_curriculum(include_episode_traces=True)
         )
-        self.export_curriculum_without_traces_button.clicked.connect(
-            lambda _checked=False: self._export_selected_curriculum(include_episode_traces=False)
-        )
+        self.export_curriculum_plan_button.clicked.connect(self._export_selected_curriculum_plan)
         self.export_checkpoint_button.clicked.connect(self._export_selected_checkpoint)
         self.evaluate_checkpoint_button.clicked.connect(self._emit_evaluate_selected_checkpoint)
         self.import_checkpoint_button.clicked.connect(self._import_checkpoint_from_file)
+        self.import_curriculum_button.clicked.connect(self._import_curriculum_from_file)
 
         self._render_empty_selection()
 
@@ -707,7 +724,7 @@ class CheckpointHistoryView(QWidget):
 
     def _set_export_buttons_enabled(self, enabled: bool) -> None:
         self.export_curriculum_button.setEnabled(enabled)
-        self.export_curriculum_without_traces_button.setEnabled(enabled)
+        self.export_curriculum_plan_button.setEnabled(enabled)
         self.export_checkpoint_button.setEnabled(enabled)
         self.evaluate_checkpoint_button.setEnabled(enabled)
 
@@ -716,16 +733,16 @@ class CheckpointHistoryView(QWidget):
         if checkpoint is None:
             QMessageBox.warning(
                 self,
-                "Export Curriculum",
-                "Select a checkpoint before exporting a curriculum.",
+                "Export Trace",
+                "Select a checkpoint before exporting a trace.",
             )
             return
 
         suffix = "" if include_episode_traces else "_without_traces"
-        default_path = f"curriculum_{checkpoint.checkpoint_id}{suffix}.json"
+        default_path = f"trace_{checkpoint.checkpoint_id}{suffix}.json"
         selected_path, _selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Export Curriculum",
+            "Export Trace",
             default_path,
             "JSON Files (*.json);;All Files (*)",
         )
@@ -740,6 +757,47 @@ class CheckpointHistoryView(QWidget):
             checkpoint,
             include_episode_traces=include_episode_traces,
         )
+        try:
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Export Trace",
+                f"Could not write trace export:\n{exc}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Export Trace",
+            f"Trace exported to:\n{path}",
+        )
+
+    def _export_selected_curriculum_plan(self) -> None:
+        checkpoint = self._selected_export_checkpoint()
+        if checkpoint is None:
+            QMessageBox.warning(
+                self,
+                "Export Curriculum",
+                "Select a checkpoint before exporting a curriculum.",
+            )
+            return
+
+        default_path = f"curriculum_{checkpoint.checkpoint_id}.json"
+        selected_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Curriculum",
+            default_path,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected_path:
+            return
+
+        path = Path(selected_path).expanduser()
+        if path.suffix == "":
+            path = path.with_suffix(".json")
+
+        payload = self._curriculum_plan_export_payload(checkpoint)
         try:
             path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         except OSError as exc:
@@ -820,6 +878,30 @@ class CheckpointHistoryView(QWidget):
             return
 
         self.checkpoint_import_requested.emit(checkpoint)
+
+    def _import_curriculum_from_file(self) -> None:
+        selected_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Import Curriculum",
+            "",
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected_path:
+            return
+
+        path = Path(selected_path).expanduser()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self._validate_curriculum_plan_payload(payload)
+        except (OSError, TypeError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                "Import Curriculum",
+                f"Could not import curriculum:\n{exc}",
+            )
+            return
+
+        self.curriculum_import_requested.emit(payload)
 
     def _emit_evaluate_selected_checkpoint(self) -> None:
         checkpoint = self._selected_export_checkpoint()
@@ -910,6 +992,170 @@ class CheckpointHistoryView(QWidget):
             "tasks": exported_tasks,
             "training_runs": training_runs,
         }
+
+    def _curriculum_plan_export_payload(self, target_checkpoint: Checkpoint) -> dict[str, object]:
+        lineage = self._checkpoint_lineage(target_checkpoint)
+        if not lineage:
+            lineage = [target_checkpoint]
+
+        runs_by_id = {run.run_id: run for run in self._snapshot.runs}
+        environments: list[dict[str, object]] = []
+        environment_ids_by_key: dict[str, int] = {}
+        steps: list[dict[str, object]] = []
+        curriculum_seed: int | None = None
+
+        for order, checkpoint in enumerate(lineage, start=1):
+            run = runs_by_id.get(checkpoint.run_id or "")
+            task_snapshot = (
+                self._snapshot.run_task_snapshots.get(checkpoint.run_id or "")
+                or checkpoint.task_snapshot
+            )
+            env_id = self._curriculum_environment_ref(
+                task_snapshot,
+                environments=environments,
+                environment_ids_by_key=environment_ids_by_key,
+            )
+            run_config_payload = self._run_config_payload(run) or {}
+            step_payload = self._curriculum_plan_step_payload(
+                order=order,
+                env_id=env_id,
+                run_config_payload=run_config_payload,
+                checkpoint=checkpoint,
+            )
+            if curriculum_seed is None and isinstance(step_payload.get("seed"), int):
+                curriculum_seed = int(step_payload["seed"])
+            steps.append(step_payload)
+
+        curriculum: dict[str, object] = {
+            "size": len(steps),
+            "steps": steps,
+        }
+        if curriculum_seed is not None:
+            curriculum["seed"] = curriculum_seed
+
+        payload: dict[str, object] = {
+            "curriculum": curriculum,
+            "environments": environments,
+        }
+        evaluation_payload = self._curriculum_plan_evaluation_payload(
+            target_checkpoint,
+            environments=environments,
+            environment_ids_by_key=environment_ids_by_key,
+        )
+        if evaluation_payload is not None:
+            payload["evaluation"] = evaluation_payload
+        return payload
+
+    def _curriculum_plan_step_payload(
+        self,
+        *,
+        order: int,
+        env_id: int | None,
+        run_config_payload: dict[str, object],
+        checkpoint: Checkpoint,
+    ) -> dict[str, object]:
+        config = RunConfig.from_dict(run_config_payload) if run_config_payload else RunConfig(
+            algorithm=str(checkpoint.metadata.get("algorithm", "q_learning")),
+            max_steps=checkpoint.step if checkpoint.step > 0 else None,
+        )
+        hyperparameters = dict(config.hyperparameters)
+        step_payload: dict[str, object] = {
+            "step_id": order,
+            "env_id": env_id,
+            "steps": config.max_steps,
+            "max_episode_length": config.max_steps_per_episode,
+            "algorithm": config.algorithm,
+            "learning_rate": config.learning_rate,
+            "discount_factor": config.gamma,
+            "epsilon_start": config.epsilon,
+            "episode_trace_sample_rate": config.episode_trace_sample_rate,
+        }
+        if config.seed is not None:
+            step_payload["seed"] = config.seed
+        if config.max_episodes is not None:
+            step_payload["max_episodes"] = config.max_episodes
+        if config.max_duration_seconds is not None:
+            step_payload["max_duration_seconds"] = config.max_duration_seconds
+        if "epsilon_decay" in hyperparameters:
+            step_payload["epsilon_decay"] = hyperparameters["epsilon_decay"]
+        if "epsilon_min" in hyperparameters:
+            step_payload["epsilon_min"] = hyperparameters["epsilon_min"]
+        extra_hyperparameters = {
+            key: value
+            for key, value in hyperparameters.items()
+            if key not in {"learning_rate", "lr", "gamma", "epsilon", "epsilon_decay", "epsilon_min"}
+        }
+        if extra_hyperparameters:
+            step_payload["hyperparameters"] = extra_hyperparameters
+        if config.breakpoints:
+            step_payload["breakpoints"] = [breakpoint.to_dict() for breakpoint in config.breakpoints]
+        return step_payload
+
+    def _curriculum_plan_evaluation_payload(
+        self,
+        checkpoint: Checkpoint,
+        *,
+        environments: list[dict[str, object]],
+        environment_ids_by_key: dict[str, int],
+    ) -> dict[str, object] | None:
+        evaluation = checkpoint.metadata.get("evaluation")
+        if not isinstance(evaluation, dict):
+            return None
+        run_id = evaluation.get("run_id")
+        task_snapshot = (
+            self._snapshot.run_task_snapshots.get(run_id)
+            if isinstance(run_id, str)
+            else None
+        )
+        evaluation_env = self._curriculum_environment_ref(
+            task_snapshot,
+            environments=environments,
+            environment_ids_by_key=environment_ids_by_key,
+        )
+        return {
+            "evaluation_env": evaluation_env,
+            "eval_episodes": evaluation.get("episode_count"),
+            "max_episode_length": evaluation.get("max_steps_per_episode"),
+            "eval_seed": evaluation.get("seed"),
+        }
+
+    def _curriculum_environment_ref(
+        self,
+        task_snapshot: TaskSnapshot | None,
+        *,
+        environments: list[dict[str, object]],
+        environment_ids_by_key: dict[str, int],
+    ) -> int | None:
+        if task_snapshot is None:
+            return None
+
+        task_payload = task_snapshot.to_dict()
+        task_key = json.dumps(task_payload, sort_keys=True)
+        existing_ref = environment_ids_by_key.get(task_key)
+        if existing_ref is not None:
+            return existing_ref
+
+        env_ref = len(environments)
+        environment_ids_by_key[task_key] = env_ref
+        environment_payload = {
+            **task_payload,
+            "task_id": env_ref,
+        }
+        environments.append(environment_payload)
+        return env_ref
+
+    def _validate_curriculum_plan_payload(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            raise ValueError("Curriculum file must contain a JSON object.")
+        curriculum = payload.get("curriculum")
+        if not isinstance(curriculum, dict):
+            raise ValueError("Curriculum file is missing the curriculum object.")
+        steps = curriculum.get("steps")
+        if not isinstance(steps, list) or not steps:
+            raise ValueError("Curriculum must contain at least one training step.")
+        environments = payload.get("environments")
+        if not isinstance(environments, list) or not environments:
+            raise ValueError("Curriculum must contain environment/task definitions.")
 
     def _checkpoint_lineage(self, target_checkpoint: Checkpoint) -> list[Checkpoint]:
         checkpoints_by_id = {
