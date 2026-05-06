@@ -375,6 +375,7 @@ class CheckpointGraphWidget(QWidget):
 class CheckpointHistoryView(QWidget):
     inspect_episode_requested = Signal(object)
     checkpoint_import_requested = Signal(object)
+    checkpoint_evaluation_requested = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -425,6 +426,11 @@ class CheckpointHistoryView(QWidget):
             "Export only the selected checkpoint JSON."
         )
         self.export_checkpoint_button.setEnabled(False)
+        self.evaluate_checkpoint_button = QPushButton("Run Evaluation", right_panel)
+        self.evaluate_checkpoint_button.setToolTip(
+            "Evaluate the selected checkpoint using the Evaluation tab settings."
+        )
+        self.evaluate_checkpoint_button.setEnabled(False)
         self.import_checkpoint_button = QPushButton("Import Checkpoint", right_panel)
         self.import_checkpoint_button.setToolTip(
             "Import one checkpoint JSON into the current history."
@@ -457,6 +463,7 @@ class CheckpointHistoryView(QWidget):
         export_buttons_layout.addWidget(self.export_curriculum_button)
         export_buttons_layout.addWidget(self.export_curriculum_without_traces_button)
         export_buttons_layout.addWidget(self.export_checkpoint_button)
+        export_buttons_layout.addWidget(self.evaluate_checkpoint_button)
         export_buttons_layout.addWidget(self.import_checkpoint_button)
 
         right_layout.addWidget(self.training_source_label)
@@ -484,6 +491,7 @@ class CheckpointHistoryView(QWidget):
             lambda _checked=False: self._export_selected_curriculum(include_episode_traces=False)
         )
         self.export_checkpoint_button.clicked.connect(self._export_selected_checkpoint)
+        self.evaluate_checkpoint_button.clicked.connect(self._emit_evaluate_selected_checkpoint)
         self.import_checkpoint_button.clicked.connect(self._import_checkpoint_from_file)
 
         self._render_empty_selection()
@@ -651,6 +659,7 @@ class CheckpointHistoryView(QWidget):
                 f"Environment: {evaluation.get('environment_id', 'unknown')}",
                 f"Episodes requested: {evaluation.get('episode_count', 'unknown')}",
                 f"Max steps / episode: {evaluation.get('max_steps_per_episode') or 'no limit'}",
+                f"Seed: {evaluation.get('seed') if evaluation.get('seed') is not None else 'random'}",
                 f"Recorded evaluation episodes: {len(episodes)}",
             ]
         elif evaluation_error is not None:
@@ -700,6 +709,7 @@ class CheckpointHistoryView(QWidget):
         self.export_curriculum_button.setEnabled(enabled)
         self.export_curriculum_without_traces_button.setEnabled(enabled)
         self.export_checkpoint_button.setEnabled(enabled)
+        self.evaluate_checkpoint_button.setEnabled(enabled)
 
     def _export_selected_curriculum(self, *, include_episode_traces: bool) -> None:
         checkpoint = self._selected_export_checkpoint()
@@ -810,6 +820,17 @@ class CheckpointHistoryView(QWidget):
             return
 
         self.checkpoint_import_requested.emit(checkpoint)
+
+    def _emit_evaluate_selected_checkpoint(self) -> None:
+        checkpoint = self._selected_export_checkpoint()
+        if checkpoint is None:
+            QMessageBox.warning(
+                self,
+                "Run Evaluation",
+                "Select a checkpoint before running evaluation.",
+            )
+            return
+        self.checkpoint_evaluation_requested.emit(checkpoint)
 
     def _selected_export_checkpoint(self) -> Checkpoint | None:
         selected_edge_id = self.graph_widget.selected_edge_id
@@ -1018,6 +1039,10 @@ class CheckpointHistoryView(QWidget):
                     ("Evaluation task", str(evaluation.get("task_name", "unknown"))),
                     ("Evaluation run ID", str(evaluation.get("run_id", "unknown"))),
                     ("Evaluation episodes", str(evaluation.get("episode_count", "unknown"))),
+                    (
+                        "Evaluation seed",
+                        str(evaluation.get("seed")) if evaluation.get("seed") is not None else "random",
+                    ),
                 ]
             )
         evaluation_error = checkpoint.metadata.get("evaluation_error")

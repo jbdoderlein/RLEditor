@@ -32,11 +32,13 @@ def test_evaluation_view_builds_policy_from_selected_task() -> None:
     view.task_combo.setCurrentIndex(1)
     view.episode_count_spin.setValue(7)
     view.max_steps_per_episode_spin.setValue(250)
+    view.seed_spin.setValue(123)
 
     policy = view.build_evaluation_policy()
 
     assert policy["episode_count"] == 7
     assert policy["max_steps_per_episode"] == 250
+    assert policy["seed"] == 123
     assert policy["trace_sample_rate"] == 1.0
     assert policy["task"]["task_id"] == "task_eval"
     assert policy["task"]["config"] == {"difficulty": 3}

@@ -38,6 +38,7 @@ def evaluate_policy(
     run_id: str,
     episode_count: int,
     max_steps_per_episode: int | None,
+    seed: int | None,
 ) -> EvaluationResult:
     if episode_count <= 0:
         raise ValueError("Evaluation episode_count must be positive")
@@ -59,7 +60,7 @@ def evaluate_policy(
                 action_selector=action_selector,
                 run_id=run_id,
                 episode_id=episode_index + 1,
-                seed=None if config.seed is None else config.seed + episode_index,
+                seed=None if seed is None else seed + episode_index,
                 max_steps_per_episode=max_steps_per_episode,
                 algorithm=config.algorithm,
             )
@@ -241,6 +242,7 @@ def _run_episode(
         metadata={
             "runner": "evaluation",
             "algorithm": algorithm,
+            "seed": seed,
             "trace_sample_rate": 1.0,
             "restorable_state_captured": any(
                 moment.restorable_env_state is not None for moment in moments

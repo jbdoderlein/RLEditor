@@ -81,6 +81,7 @@ def test_checkpoint_history_view_prefers_evaluation_metrics_and_lists_eval_episo
                 "environment_id": "tiny_env",
                 "episode_count": 2,
                 "max_steps_per_episode": 5,
+                "seed": 42,
             },
             "evaluation_metrics": {
                 "mean_reward": 1.0,
@@ -114,7 +115,36 @@ def test_checkpoint_history_view_prefers_evaluation_metrics_and_lists_eval_episo
     assert "Evaluation metrics" in view.checkpoint_details.toHtml()
     assert "100.0%" in view.checkpoint_details.toHtml()
     assert "Evaluation Task" in view.segment_details.toPlainText()
+    assert "Seed: 42" in view.segment_details.toPlainText()
     assert view.episode_list.count() == 2
+
+
+def test_checkpoint_history_view_emits_manual_evaluation_for_selected_checkpoint() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_004",
+        label="Checkpoint 004",
+        created_at="2026-04-28 11:30:00",
+        reason="run_finished",
+        run_id="run_train",
+        task_name="Training Task",
+        step=50,
+        episode=3,
+        task_snapshot=TaskSnapshot(
+            environment_id="tiny_env",
+            task_name="Training Task",
+        ),
+        metadata={"learner_state": {"q_values": []}},
+    )
+    captured: list[Checkpoint] = []
+    view.checkpoint_evaluation_requested.connect(captured.append)
+    view.set_history(TrainingHistorySnapshot([], [checkpoint], {}, {}))
+
+    view.evaluate_checkpoint_button.click()
+
+    assert captured
+    assert captured[0].checkpoint_id == "checkpoint_004"
 
 
 def test_checkpoint_history_view_builds_selected_checkpoint_export_payload() -> None:

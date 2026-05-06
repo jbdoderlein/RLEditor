@@ -4,11 +4,11 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from rleditor.application.persistence import ProjectStore
 from rleditor.application.services import TaskService, TrainingService
-from rleditor.core.models import RunConfig, TaskDefinition
+from rleditor.core.models import DerivedTaskDefinition, RunConfig, TaskDefinition
 from rleditor.plugins.base import EnvironmentPlugin
 from rleditor.plugins.registry import PluginRegistry
 from rleditor.ui.shell.main_window import MainWindow
@@ -29,6 +29,17 @@ class _DummyBackend:
     def create_env(self, task: TaskDefinition):
         _ = task
         return object()
+
+
+class _EmittingGuiExtension:
+    def create_task_editor_widget(self, task, on_task_changed):
+        task.metadata["editor_initialized"] = True
+        on_task_changed(task)
+        return QLabel("Editor")
+
+    def create_episode_replay_widget(self, parent=None):
+        _ = parent
+        return None
 
 
 def _app() -> QApplication:
@@ -116,6 +127,52 @@ def test_task_history_selection_updates_current_task_and_combo() -> None:
     assert window.task_history_view.selected_task() is second_task
 
 
+def test_task_selection_ignores_editor_initialization_change_signal() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=_EmittingGuiExtension(),
+        )
+    )
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+    )
+    second_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Independent Task",
+        task_id="task_other",
+        config={"difficulty": 3},
+    )
+    window._add_task_to_workspace(second_task, select=False)
+
+    refresh_count = 0
+    original_set_tasks = window.task_history_view.set_tasks
+
+    def _counting_set_tasks(tasks):
+        nonlocal refresh_count
+        refresh_count += 1
+        original_set_tasks(tasks)
+
+    window.task_history_view.set_tasks = _counting_set_tasks  # type: ignore[method-assign]
+    window.task_history_view.set_primary_workspace_index(
+        1,
+        preserve_multi_selection=False,
+        emit_signal=True,
+    )
+
+    assert refresh_count == 0
+    assert window._current_task is second_task
+    assert second_task.metadata["editor_initialized"] is True
+
+
 def test_task_history_add_new_task_button_creates_from_workspace_root() -> None:
     _app()
     registry = PluginRegistry()
@@ -141,6 +198,74 @@ def test_task_history_add_new_task_button_creates_from_workspace_root() -> None:
     assert len(window._task_workspace) == 2
     assert window._task_workspace[-1].name == "Edited Main Task 2"
     assert window.task_history_view.selected_task() is window._task_workspace[-1]
+
+
+def test_task_history_edit_button_opens_selected_task_editor() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+    )
+    second_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Independent Task",
+        task_id="task_other",
+    )
+    window._add_task_to_workspace(second_task, select=False)
+    window.task_history_view.set_primary_workspace_index(1, preserve_multi_selection=False, emit_signal=False)
+
+    window.task_history_view.edit_task_button.click()
+
+    assert window._current_task is second_task
+    assert window.tabs.currentWidget() is window.task_editor_tab
+
+
+def test_task_history_copy_duplicates_selected_task() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+    )
+    child_task = DerivedTaskDefinition(
+        environment_id="dummy_env",
+        name="Child Task",
+        task_id="task_child",
+        parent_task_id="task_main",
+    )
+    window._add_task_to_workspace(child_task, select=False)
+
+    window.task_history_view.set_primary_workspace_index(1, preserve_multi_selection=False, emit_signal=False)
+    window.task_history_view.copy_task_button.click()
+
+    copied_task = window._task_workspace[-1]
+    assert copied_task.name == "Child Task Copy"
+    assert copied_task.task_id is None
+    assert isinstance(copied_task, DerivedTaskDefinition)
+    assert copied_task.parent_task_id == "task_main"
 
 
 def test_project_is_saved_only_when_save_button_is_clicked(tmp_path) -> None:
@@ -215,6 +340,7 @@ def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() 
     window.evaluation_view.task_combo.setCurrentIndex(2)
     window.evaluation_view.episode_count_spin.setValue(4)
     window.evaluation_view.max_steps_per_episode_spin.setValue(77)
+    window.evaluation_view.seed_spin.setValue(314)
 
     window.task_history_view.set_primary_workspace_index(1, preserve_multi_selection=False, emit_signal=True)
     window.task_history_view.toggle_workspace_index_selection(2, emit_signal=True)
@@ -236,3 +362,4 @@ def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() 
     assert config.evaluation_policy["task"]["task_id"] == "task_third"
     assert config.evaluation_policy["episode_count"] == 4
     assert config.evaluation_policy["max_steps_per_episode"] == 77
+    assert config.evaluation_policy["seed"] == 314

@@ -648,6 +648,40 @@ def test_training_service_evaluates_checkpoint_with_recorded_traces() -> None:
     assert all(len(trace.moments) == len(trace.steps) + 1 for trace in evaluation_episodes)
 
 
+def test_training_service_manually_evaluates_selected_checkpoint_with_fixed_seed() -> None:
+    service = TrainingService(_history_registry())
+    task = TaskDefinition(environment_id="tiny_env", name="Training Task", task_id="task_train")
+    evaluation_task = TaskDefinition(environment_id="tiny_env", name="Manual Evaluation Task", task_id="task_eval")
+    config = RunConfig(max_steps=20, max_episodes=1, seed=23)
+
+    service.start(task, config)
+    for _ in range(10):
+        service._runner._on_tick()
+        if service.status == TrainingStatus.FINISHED:
+            break
+
+    checkpoint_id = service.history_snapshot().checkpoints[-1].checkpoint_id
+    evaluated_checkpoint = service.evaluate_checkpoint(
+        checkpoint_id,
+        {
+            "task": evaluation_task.to_dict(),
+            "episode_count": 2,
+            "max_steps_per_episode": 5,
+            "seed": 101,
+            "trace_sample_rate": 1.0,
+        },
+    )
+    snapshot = service.history_snapshot()
+    evaluation = evaluated_checkpoint.metadata["evaluation"]
+    evaluation_run_id = evaluation["run_id"]
+    evaluation_episodes = snapshot.episodes_by_run[evaluation_run_id]
+
+    assert evaluation["task_name"] == "Manual Evaluation Task"
+    assert evaluation["seed"] == 101
+    assert evaluated_checkpoint.metadata["evaluation_metrics"]["episode"] == 2
+    assert [trace.metadata["seed"] for trace in evaluation_episodes] == [101, 102]
+
+
 def test_training_service_raises_without_simulated_fallback_for_unknown_env() -> None:
     service = TrainingService(_history_registry())
     task = TaskDefinition(environment_id="missing_env", name="Missing Env Task", task_id="task_missing")

@@ -16,6 +16,7 @@ from rleditor.application.persistence import ProjectState, ProjectStore
 from rleditor.application.services import TaskService, TrainingService
 from rleditor.core.models import (
     Checkpoint,
+    DerivedTaskDefinition,
     EpisodeTrace,
     RunConfig,
     TaskDefinition,
@@ -98,10 +99,13 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         self.task_history_view.selection_changed.connect(self._on_task_history_selection_changed)
         self.task_history_view.create_task_requested.connect(self._create_new_task)
+        self.task_history_view.edit_task_requested.connect(self._edit_task_from_history)
+        self.task_history_view.copy_task_requested.connect(self._copy_task_from_history)
         self.task_editor_view.task_changed.connect(self._on_task_changed)
         self.episode_view.create_task_from_moment_requested.connect(self._on_derive_task_from_episode_moment)
         self.history_view.inspect_episode_requested.connect(self._inspect_episode_from_history)
         self.history_view.checkpoint_import_requested.connect(self._on_checkpoint_import_requested)
+        self.history_view.checkpoint_evaluation_requested.connect(self._on_checkpoint_evaluation_requested)
 
         self.training_view.start_requested.connect(self._start_training)
         self.training_view.pause_requested.connect(self._training_service.pause)
@@ -290,6 +294,21 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(f"Imported checkpoint: {imported_checkpoint.checkpoint_id}")
 
+    def _on_checkpoint_evaluation_requested(self, checkpoint: Checkpoint) -> None:
+        policy = self.evaluation_view.build_evaluation_policy()
+        if not policy:
+            self.statusBar().showMessage("Cannot evaluate checkpoint: no evaluation task selected")
+            return
+        try:
+            evaluated_checkpoint = self._training_service.evaluate_checkpoint(
+                checkpoint.checkpoint_id,
+                policy,
+            )
+        except RuntimeError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+        self.statusBar().showMessage(f"Evaluation completed for {evaluated_checkpoint.checkpoint_id}")
+
     def _refresh_history_view(self) -> None:
         self.history_view.set_history(self._training_service.history_snapshot(deep=False))
 
@@ -365,6 +384,28 @@ class MainWindow(QMainWindow):
         self._add_task_to_workspace(task, select=True)
         self.tabs.setCurrentWidget(self.task_editor_tab)
         self.statusBar().showMessage(f"Created task: {task.name}")
+
+    def _edit_task_from_history(self, workspace_index: int) -> None:
+        if workspace_index < 0 or workspace_index >= len(self._task_workspace):
+            return
+        self._select_task_index(
+            workspace_index,
+            sync_task_history=True,
+            preserve_graph_multi_selection=True,
+        )
+        self.tabs.setCurrentWidget(self.task_editor_tab)
+        self.statusBar().showMessage(f"Editing task: {self._task_workspace[workspace_index].name}")
+
+    def _copy_task_from_history(self, workspace_index: int) -> None:
+        if workspace_index < 0 or workspace_index >= len(self._task_workspace):
+            return
+        task = deepcopy(self._task_workspace[workspace_index])
+        task.name = self._unique_task_name(f"{task.name} Copy")
+        task.task_id = None
+        if isinstance(task, DerivedTaskDefinition):
+            task.derived_task_id = None
+        self._add_task_to_workspace(task, select=True)
+        self.statusBar().showMessage(f"Copied task: {task.name}")
 
     def _on_save_project_requested(self) -> None:
         if self._save_project():

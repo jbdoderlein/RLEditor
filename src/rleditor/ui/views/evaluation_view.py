@@ -34,10 +34,15 @@ class EvaluationView(QWidget):
         self.max_steps_per_episode_spin.setRange(0, 10_000_000)
         self.max_steps_per_episode_spin.setSpecialValueText("No limit")
         self.max_steps_per_episode_spin.setValue(1000)
+        self.seed_spin = QSpinBox(self)
+        self.seed_spin.setRange(-1, 2_147_483_647)
+        self.seed_spin.setSpecialValueText("Use training seed")
+        self.seed_spin.setValue(-1)
 
         form.addRow("Task", self.task_combo)
         form.addRow("Episodes", self.episode_count_spin)
         form.addRow("Max steps / episode", self.max_steps_per_episode_spin)
+        form.addRow("Seed", self.seed_spin)
 
         root.addWidget(title)
         root.addWidget(subtitle)
@@ -77,10 +82,12 @@ class EvaluationView(QWidget):
             return {}
 
         max_steps = self.max_steps_per_episode_spin.value()
+        seed = self.seed_spin.value()
         return {
             "task": task.to_dict(),
             "episode_count": self.episode_count_spin.value(),
             "max_steps_per_episode": max_steps if max_steps > 0 else None,
+            "seed": seed if seed >= 0 else None,
             "trace_sample_rate": 1.0,
         }
 

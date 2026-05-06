@@ -221,6 +221,56 @@ class TrainingService(QObject):
         self.history_changed.emit()
         return deepcopy(imported_checkpoint)
 
+    def evaluate_checkpoint(self, checkpoint_id: str, evaluation_policy: dict[str, Any]) -> Checkpoint:
+        if self._has_live_runs():
+            msg = "Cannot evaluate a checkpoint while training is active."
+            raise RuntimeError(msg)
+
+        checkpoint_index = self._checkpoint_index(checkpoint_id)
+        if checkpoint_index is None:
+            msg = f"Unknown checkpoint: {checkpoint_id}"
+            raise RuntimeError(msg)
+
+        checkpoint = deepcopy(self._checkpoints[checkpoint_index])
+        metadata = dict(checkpoint.metadata)
+        learner_state = metadata.get("learner_state")
+        if not isinstance(learner_state, dict):
+            msg = f"Checkpoint {checkpoint_id} does not contain a learner state."
+            raise RuntimeError(msg)
+
+        config = self._config_for_checkpoint(checkpoint)
+        config.evaluation_policy = deepcopy(evaluation_policy)
+        evaluation_result, evaluation_error = self._run_checkpoint_evaluation(
+            checkpoint_id=checkpoint.checkpoint_id,
+            config=config,
+            learner_state=deepcopy(learner_state),
+            policy=config.evaluation_policy,
+        )
+
+        evaluation_run_id = f"eval_{checkpoint.checkpoint_id}"
+        metadata.pop("evaluation", None)
+        metadata.pop("evaluation_metrics", None)
+        metadata.pop("evaluation_error", None)
+        if evaluation_result is not None:
+            metadata["evaluation_metrics"] = self._metrics_payload(evaluation_result.metrics)
+            metadata["evaluation"] = self._evaluation_metadata_payload(
+                evaluation_result,
+                config=config,
+            )
+        elif evaluation_error is not None:
+            self._episodes_by_run.pop(evaluation_run_id, None)
+            self._pending_episodes_by_run.pop(evaluation_run_id, None)
+            self._run_task_snapshots.pop(evaluation_run_id, None)
+            metadata["evaluation_error"] = evaluation_error
+
+        checkpoint.metadata = metadata
+        self._checkpoints[checkpoint_index] = checkpoint
+        self.history_changed.emit()
+        if evaluation_error is not None:
+            msg = f"Evaluation failed for {checkpoint_id}: {evaluation_error}"
+            raise RuntimeError(msg)
+        return deepcopy(checkpoint)
+
     def start(
         self,
         task: TaskDefinition,
@@ -541,15 +591,10 @@ class TrainingService(QObject):
         }
         if evaluation_result is not None:
             metadata["evaluation_metrics"] = self._metrics_payload(evaluation_result.metrics)
-            metadata["evaluation"] = {
-                "run_id": evaluation_result.run_id,
-                "task_id": evaluation_result.task.task_id,
-                "task_name": evaluation_result.task.name,
-                "environment_id": evaluation_result.task.environment_id,
-                "episode_count": evaluation_result.metrics.episode,
-                "max_steps_per_episode": self._evaluation_max_steps_per_episode(context.config),
-                "trace_sample_rate": 1.0,
-            }
+            metadata["evaluation"] = self._evaluation_metadata_payload(
+                evaluation_result,
+                config=context.config,
+            )
         elif evaluation_error is not None:
             metadata["evaluation_error"] = evaluation_error
 
@@ -580,6 +625,21 @@ class TrainingService(QObject):
         learner_state: dict[str, Any],
     ) -> tuple[EvaluationResult | None, str | None]:
         policy = context.config.evaluation_policy
+        return self._run_checkpoint_evaluation(
+            checkpoint_id=checkpoint_id,
+            config=context.config,
+            learner_state=learner_state,
+            policy=policy,
+        )
+
+    def _run_checkpoint_evaluation(
+        self,
+        *,
+        checkpoint_id: str,
+        config: RunConfig,
+        learner_state: dict[str, Any],
+        policy: dict[str, Any],
+    ) -> tuple[EvaluationResult | None, str | None]:
         if not isinstance(policy, dict) or not policy:
             return None, None
 
@@ -594,19 +654,25 @@ class TrainingService(QObject):
         if episode_count <= 0:
             return None, None
 
-        max_steps_per_episode = self._evaluation_max_steps_per_episode(context.config)
+        try:
+            evaluation_seed = self._evaluation_seed(config)
+        except ValueError as exc:
+            return None, str(exc)
+
+        max_steps_per_episode = self._evaluation_max_steps_per_episode(config)
         evaluation_task = self._task_from_policy_payload(task_payload)
         evaluation_run_id = f"eval_{checkpoint_id}"
 
         try:
             result = evaluate_policy(
                 task=evaluation_task,
-                config=context.config,
+                config=config,
                 learner_state=learner_state,
                 env_factory=self._resolve_env_factory(evaluation_task),
                 run_id=evaluation_run_id,
                 episode_count=episode_count,
                 max_steps_per_episode=max_steps_per_episode,
+                seed=evaluation_seed,
             )
         except Exception as exc:
             return None, str(exc)
@@ -615,6 +681,23 @@ class TrainingService(QObject):
         self._pending_episodes_by_run[evaluation_run_id] = []
         self._run_task_snapshots[evaluation_run_id] = deepcopy(result.task_snapshot)
         return result, None
+
+    def _evaluation_metadata_payload(
+        self,
+        result: EvaluationResult,
+        *,
+        config: RunConfig,
+    ) -> dict[str, Any]:
+        return {
+            "run_id": result.run_id,
+            "task_id": result.task.task_id,
+            "task_name": result.task.name,
+            "environment_id": result.task.environment_id,
+            "episode_count": result.metrics.episode,
+            "max_steps_per_episode": self._evaluation_max_steps_per_episode(config),
+            "seed": self._evaluation_seed(config),
+            "trace_sample_rate": 1.0,
+        }
 
     def _evaluation_max_steps_per_episode(self, config: RunConfig) -> int | None:
         policy = config.evaluation_policy
@@ -628,6 +711,19 @@ class TrainingService(QObject):
         except (TypeError, ValueError):
             return None
         return value if value > 0 else None
+
+    def _evaluation_seed(self, config: RunConfig) -> int | None:
+        policy = config.evaluation_policy
+        if not isinstance(policy, dict):
+            return config.seed
+        raw_value = policy.get("seed")
+        if raw_value is None or raw_value == "":
+            return config.seed
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError) as exc:
+            msg = "Evaluation seed is invalid."
+            raise ValueError(msg) from exc
 
     def _task_from_policy_payload(self, payload: dict[str, Any]) -> TaskDefinition:
         derived_keys = {
@@ -802,6 +898,28 @@ class TrainingService(QObject):
         if task_snapshot is None or task_snapshot.environment_id != task.environment_id:
             return False
         return checkpoint.metadata.get("algorithm") == config.algorithm
+
+    def _checkpoint_index(self, checkpoint_id: str) -> int | None:
+        for index, checkpoint in enumerate(self._checkpoints):
+            if checkpoint.checkpoint_id == checkpoint_id:
+                return index
+        return None
+
+    def _config_for_checkpoint(self, checkpoint: Checkpoint) -> RunConfig:
+        metadata = checkpoint.metadata if isinstance(checkpoint.metadata, dict) else {}
+        run_config_payload = metadata.get("run_config")
+        if isinstance(run_config_payload, dict):
+            return RunConfig.from_dict(run_config_payload)
+
+        raw_seed = metadata.get("seed")
+        try:
+            seed = int(raw_seed) if raw_seed is not None else None
+        except (TypeError, ValueError):
+            seed = None
+        return RunConfig(
+            algorithm=str(metadata.get("algorithm", "q_learning")),
+            seed=seed,
+        )
 
     def _checkpoint_id_exists(self, checkpoint_id: str) -> bool:
         return any(checkpoint.checkpoint_id == checkpoint_id for checkpoint in self._checkpoints)
