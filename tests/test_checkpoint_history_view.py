@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from rleditor.application.services import TrainingHistorySnapshot
-from rleditor.core.models import Checkpoint, EpisodeTrace, TaskSnapshot, TrainingRun, TrainingStatus
+from rleditor.core.models import Checkpoint, EpisodeTrace, RunConfig, TaskSnapshot, TrainingRun, TrainingStatus
 from rleditor.ui.views.checkpoint_history_view import CheckpointHistoryView
 
 
@@ -225,6 +225,60 @@ def test_checkpoint_history_view_edge_selection_shows_training_metrics_not_node_
     assert "Run ID" not in html
     assert view.segment_group.title() == "Training Run"
     assert view.episode_list.count() == 2
+
+
+def test_checkpoint_history_view_emits_training_config_when_edge_is_selected() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    config = RunConfig(
+        algorithm="sb3_dqn",
+        max_steps=None,
+        max_episodes=17,
+        max_steps_per_episode=80,
+        episode_trace_sample_rate=0.4,
+        learning_rate=0.15,
+        gamma=0.93,
+    )
+    run = TrainingRun(
+        run_id="run_config",
+        task_id="task_config",
+        status=TrainingStatus.FINISHED,
+        metadata={"run_config": config.to_dict()},
+    )
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_config",
+        label="Config checkpoint",
+        created_at="2026-05-17 09:10:00",
+        reason="run_finished",
+        run_id="run_config",
+        task_id="task_config",
+        task_name="Config Task",
+        step=100,
+        episode=17,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Config Task"),
+    )
+    view.set_history(
+        TrainingHistorySnapshot(
+            runs=[run],
+            checkpoints=[checkpoint],
+            episodes_by_run={},
+            run_task_snapshots={},
+        )
+    )
+    emitted: list[RunConfig] = []
+    view.training_run_config_selected.connect(emitted.append)
+
+    edge = view.graph_widget.edge_for_id("edge:checkpoint_config")
+    assert edge is not None
+    view._on_edge_selected(edge)
+
+    assert len(emitted) == 1
+    assert emitted[0].algorithm == "sb3_dqn"
+    assert emitted[0].max_steps is None
+    assert emitted[0].max_episodes == 17
+    assert emitted[0].max_steps_per_episode == 80
+    assert emitted[0].learning_rate == 0.15
+    assert emitted[0].gamma == 0.93
 
 
 def test_checkpoint_history_view_multiple_node_selection_compares_metric_columns() -> None:

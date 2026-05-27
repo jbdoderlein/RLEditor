@@ -144,6 +144,7 @@ class MainWindow(QMainWindow):
         self.history_view.checkpoint_import_requested.connect(self._on_checkpoint_import_requested)
         self.history_view.checkpoint_evaluation_requested.connect(self._on_checkpoint_evaluation_requested)
         self.history_view.curriculum_import_requested.connect(self._on_curriculum_import_requested)
+        self.history_view.training_run_config_selected.connect(self._on_training_run_config_selected)
 
         self.training_view.start_requested.connect(self._start_training)
         self.training_view.pause_requested.connect(self._training_service.pause)
@@ -320,6 +321,19 @@ class MainWindow(QMainWindow):
             self._set_status_busy("training", True)
         except RuntimeError as exc:
             self.statusBar().showMessage(str(exc))
+
+    def _on_training_run_config_selected(self, config: RunConfig) -> None:
+        self.training_view.set_config(config)
+        self.statusBar().showMessage("Training config loaded from selected run")
+        self._log_interaction(
+            "training_config_loaded_from_history",
+            algorithm=config.algorithm,
+            max_steps=config.max_steps,
+            max_episodes=config.max_episodes,
+            max_steps_per_episode=config.max_steps_per_episode,
+            learning_rate=config.learning_rate,
+            gamma=config.gamma,
+        )
 
     def _on_status_changed(self, status: TrainingStatus) -> None:
         self.training_view.set_status(status)

@@ -10,8 +10,17 @@ from gymnasium.spaces import Discrete
 from PySide6.QtWidgets import QApplication, QLabel
 
 from rleditor.application.persistence import ProjectStore
-from rleditor.application.services import TaskService, TrainingService
-from rleditor.core.models import DerivedTaskDefinition, RunConfig, TaskDefinition, TrainingStatus
+from rleditor.application.services import TaskService, TrainingHistorySnapshot, TrainingService
+from rleditor.core.models import (
+    Breakpoint,
+    Checkpoint,
+    DerivedTaskDefinition,
+    RunConfig,
+    TaskDefinition,
+    TaskSnapshot,
+    TrainingRun,
+    TrainingStatus,
+)
 from rleditor.plugins.base import EnvironmentPlugin
 from rleditor.plugins.registry import PluginRegistry
 from rleditor.ui.shell.main_window import MainWindow
@@ -568,6 +577,94 @@ def test_project_is_saved_only_when_save_button_is_clicked(tmp_path) -> None:
 
     assert restored is not None
     assert restored.task_workspace[0].name == "Unsaved Task Name"
+
+
+def test_checkpoint_history_edge_selection_applies_config_to_training_tab() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    interaction_logger = _FakeInteractionLogger()
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+        interaction_logger=interaction_logger,  # type: ignore[arg-type]
+    )
+    selected_config = RunConfig(
+        algorithm="sb3_ppo",
+        max_steps=None,
+        max_episodes=24,
+        max_steps_per_episode=90,
+        episode_trace_sample_rate=0.35,
+        learning_rate=0.12,
+        gamma=0.94,
+        breakpoints=[
+            Breakpoint(
+                kind="success_rate_gte",
+                value=0.7,
+                window=10,
+                actions=["pause", "checkpoint"],
+            )
+        ],
+    )
+    run = TrainingRun(
+        run_id="run_selected",
+        task_id="task_selected",
+        status=TrainingStatus.FINISHED,
+        metadata={"run_config": selected_config.to_dict()},
+    )
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_selected",
+        label="Selected checkpoint",
+        created_at="2026-05-17 10:00:00",
+        reason="run_finished",
+        run_id="run_selected",
+        task_id="task_selected",
+        task_name="Selected Task",
+        step=120,
+        episode=24,
+        task_snapshot=TaskSnapshot(environment_id="dummy_env", task_name="Selected Task"),
+    )
+    window.history_view.set_history(
+        TrainingHistorySnapshot(
+            runs=[run],
+            checkpoints=[checkpoint],
+            episodes_by_run={},
+            run_task_snapshots={},
+        )
+    )
+
+    edge = window.history_view.graph_widget.edge_for_id("edge:checkpoint_selected")
+    assert edge is not None
+    window.history_view.graph_widget.select_edge(edge.edge_id)
+    window.history_view.graph_widget.edge_selected.emit(edge)
+
+    applied_config = window.training_view.build_config()
+    assert applied_config.algorithm == "sb3_ppo"
+    assert applied_config.max_steps is None
+    assert applied_config.max_episodes == 24
+    assert applied_config.max_steps_per_episode == 90
+    assert applied_config.episode_trace_sample_rate == pytest.approx(0.35)
+    assert applied_config.learning_rate == pytest.approx(0.12)
+    assert applied_config.gamma == pytest.approx(0.94)
+    assert len(applied_config.breakpoints) == 1
+    assert applied_config.breakpoints[0].kind == "success_rate_gte"
+    assert "Training config loaded from selected run" in window.statusBar().currentMessage()
+    assert any(
+        event == "training_config_loaded_from_history"
+        and payload["algorithm"] == "sb3_ppo"
+        and payload["max_episodes"] == 24
+        for event, payload in interaction_logger.records
+    )
 
 
 def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() -> None:

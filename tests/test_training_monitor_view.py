@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from rleditor.core.models import TrainingMetrics
+from rleditor.core.models import Breakpoint, RunConfig, TrainingMetrics
 from rleditor.ui.views.training_monitor_view import TrainingMonitorView
 
 
@@ -62,6 +62,45 @@ def test_training_monitor_can_build_unlimited_episode_config() -> None:
 
     assert config.max_steps is None
     assert config.max_episodes is None
+
+
+def test_training_monitor_applies_run_config_to_controls() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    view.set_config(
+        RunConfig(
+            algorithm="sb3_ppo",
+            max_steps=None,
+            max_episodes=42,
+            max_steps_per_episode=125,
+            episode_trace_sample_rate=0.25,
+            learning_rate=0.2,
+            gamma=0.95,
+            breakpoints=[
+                Breakpoint(
+                    kind="success_rate_gte",
+                    value=0.8,
+                    window=20,
+                    actions=["pause", "checkpoint"],
+                )
+            ],
+        )
+    )
+
+    config = view.build_config()
+
+    assert config.algorithm == "sb3_ppo"
+    assert config.max_steps is None
+    assert config.max_episodes == 42
+    assert config.max_steps_per_episode == 125
+    assert config.episode_trace_sample_rate == pytest.approx(0.25)
+    assert config.learning_rate == pytest.approx(0.2)
+    assert config.gamma == pytest.approx(0.95)
+    assert len(config.breakpoints) == 1
+    assert config.breakpoints[0].kind == "success_rate_gte"
+    assert config.breakpoints[0].value == pytest.approx(0.8)
+    assert config.breakpoints[0].window == 20
 
 
 def test_training_monitor_can_select_stable_baselines3_dqn() -> None:

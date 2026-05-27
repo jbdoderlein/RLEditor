@@ -339,6 +339,32 @@ class TrainingMonitorView(QWidget):
             ],
         )
 
+    def set_config(self, config: RunConfig) -> None:
+        algorithm_index = self.algorithm_combo.findData(config.algorithm)
+        if algorithm_index >= 0:
+            self.algorithm_combo.setCurrentIndex(algorithm_index)
+
+        self._set_optional_spin_value(self.episode_count_spin, config.max_episodes)
+        self._set_optional_spin_value(
+            self.max_steps_per_episode_spin,
+            config.max_steps_per_episode,
+        )
+        self.learning_rate_spin.setValue(config.learning_rate)
+        self.discount_factor_spin.setValue(config.gamma)
+        self.trace_sample_rate_spin.setValue(config.episode_trace_sample_rate * 100.0)
+        self._breakpoint_rules = [
+            Breakpoint(
+                kind=rule.kind,
+                value=rule.value,
+                window=rule.window,
+                breakpoint_id=rule.breakpoint_id,
+                actions=list(rule.actions),
+                label=rule.label,
+            )
+            for rule in config.breakpoints
+        ]
+        self._refresh_breakpoint_list()
+
     def set_status(self, status: TrainingStatus) -> None:
         self.status_label.setText(f"Status: {status.value}")
 
@@ -376,6 +402,9 @@ class TrainingMonitorView(QWidget):
         self._reset_metric_cards()
         self.breakpoint_label.setText("Breakpoint: -")
         self.start_requested.emit(self.build_config())
+
+    def _set_optional_spin_value(self, spin_box: QSpinBox, value: int | None) -> None:
+        spin_box.setValue(0 if value is None else int(value))
 
     def _build_breakpoints_group(self) -> QGroupBox:
         group = QGroupBox("Training Breakpoints")

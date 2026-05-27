@@ -428,6 +428,7 @@ class CheckpointHistoryView(QWidget):
     checkpoint_import_requested = Signal(object)
     checkpoint_evaluation_requested = Signal(object)
     curriculum_import_requested = Signal(object)
+    training_run_config_selected = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -550,7 +551,7 @@ class CheckpointHistoryView(QWidget):
         root.addWidget(splitter, 1)
 
         self.graph_widget.node_selected.connect(self._show_node_details)
-        self.graph_widget.edge_selected.connect(self._show_edge_details)
+        self.graph_widget.edge_selected.connect(self._on_edge_selected)
         self.episode_list.currentRowChanged.connect(self._on_episode_selection_changed)
         self.inspect_episode_button.clicked.connect(self._emit_inspect_selected_episode)
         self.export_curriculum_button.clicked.connect(
@@ -718,6 +719,18 @@ class CheckpointHistoryView(QWidget):
             self.inspect_episode_button.setEnabled(True)
         else:
             self.inspect_episode_button.setEnabled(False)
+
+    def _on_edge_selected(self, edge: _LineageEdge) -> None:
+        self._show_edge_details(edge)
+        config = self._training_config_for_edge(edge)
+        if config is not None:
+            self.training_run_config_selected.emit(config)
+
+    def _training_config_for_edge(self, edge: _LineageEdge) -> RunConfig | None:
+        run_config = self._run_config_payload(edge.run)
+        if run_config is None:
+            return None
+        return RunConfig.from_dict(run_config)
 
     def _set_checkpoint_evaluation_episodes(self, checkpoint: Checkpoint) -> None:
         self.segment_group.setTitle("Evaluation Episodes")
