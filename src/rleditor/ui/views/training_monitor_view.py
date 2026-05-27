@@ -239,16 +239,30 @@ class TrainingMonitorView(QWidget):
         self.algorithm_combo.addItem("Stable-Baselines3 DQN", "sb3_dqn")
         self.algorithm_combo.addItem("Stable-Baselines3 PPO", "sb3_ppo")
 
-        self.total_steps_spin = QSpinBox(config_group)
-        self.total_steps_spin.setRange(-1, 50_000_000)
-        self.total_steps_spin.setSpecialValueText("No limit")
-        self.total_steps_spin.setToolTip("Set to -1 to train until stopped, paused by breakpoint, or another limit is reached.")
-        self.total_steps_spin.setValue(100_000)
+        self.episode_count_spin = QSpinBox(config_group)
+        self.episode_count_spin.setRange(0, 1_000_000)
+        self.episode_count_spin.setSpecialValueText("No limit")
+        self.episode_count_spin.setToolTip(
+            "Number of episodes to train before stopping automatically."
+        )
+        self.episode_count_spin.setValue(1000)
 
         self.max_steps_per_episode_spin = QSpinBox(config_group)
-        self.max_steps_per_episode_spin.setRange(0, 100_000)
+        self.max_steps_per_episode_spin.setRange(0, 10_000_000)
         self.max_steps_per_episode_spin.setSpecialValueText("No limit")
-        self.max_steps_per_episode_spin.setValue(0)
+        self.max_steps_per_episode_spin.setValue(1000)
+
+        self.learning_rate_spin = QDoubleSpinBox(config_group)
+        self.learning_rate_spin.setRange(0.0, 1.0)
+        self.learning_rate_spin.setDecimals(4)
+        self.learning_rate_spin.setSingleStep(0.01)
+        self.learning_rate_spin.setValue(0.1)
+
+        self.discount_factor_spin = QDoubleSpinBox(config_group)
+        self.discount_factor_spin.setRange(0.0, 1.0)
+        self.discount_factor_spin.setDecimals(4)
+        self.discount_factor_spin.setSingleStep(0.01)
+        self.discount_factor_spin.setValue(0.99)
 
         self.trace_sample_rate_spin = QDoubleSpinBox(config_group)
         self.trace_sample_rate_spin.setRange(0.0, 100.0)
@@ -258,8 +272,10 @@ class TrainingMonitorView(QWidget):
         self.trace_sample_rate_spin.setValue(100.0)
 
         config_form.addRow("Algorithm", self.algorithm_combo)
-        config_form.addRow("Max steps", self.total_steps_spin)
+        config_form.addRow("Episodes", self.episode_count_spin)
         config_form.addRow("Max steps / episode", self.max_steps_per_episode_spin)
+        config_form.addRow("Learning rate", self.learning_rate_spin)
+        config_form.addRow("Discount factor", self.discount_factor_spin)
         config_form.addRow("Recorded episodes", self.trace_sample_rate_spin)
 
         root.addWidget(config_group)
@@ -299,9 +315,10 @@ class TrainingMonitorView(QWidget):
         return RunConfig(
             algorithm=str(self.algorithm_combo.currentData()),
             episode_trace_sample_rate=self.trace_sample_rate_spin.value() / 100.0,
-            max_steps=(
-                self.total_steps_spin.value()
-                if self.total_steps_spin.value() > 0
+            max_steps=None,
+            max_episodes=(
+                self.episode_count_spin.value()
+                if self.episode_count_spin.value() > 0
                 else None
             ),
             max_steps_per_episode=(
@@ -309,6 +326,8 @@ class TrainingMonitorView(QWidget):
                 if self.max_steps_per_episode_spin.value() > 0
                 else None
             ),
+            learning_rate=self.learning_rate_spin.value(),
+            gamma=self.discount_factor_spin.value(),
             breakpoints=[
                 Breakpoint(
                     kind=rule.kind,

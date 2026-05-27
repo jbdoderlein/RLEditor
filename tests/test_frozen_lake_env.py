@@ -4,7 +4,9 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import gymnasium as gym
 import pytest
+from gymnasium.spaces import Discrete
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QLayout, QSizePolicy
 
@@ -17,9 +19,53 @@ from rleditor.plugins.builtin.frozen_lake import (
 from rleditor.plugins.builtin.frozen_lake_env import (
     FrozenLakeEnvState,
     FrozenLakeExtendedEnv,
+    FrozenLakeRegionWrapper,
+    FrozenLakeRewardWrapper,
+    FrozenLakeStartStateWrapper,
+    TILE_FROZEN,
+    TILE_GOAL,
+    TILE_HOLE,
     TILE_START,
+    _coerce_reward_config,
     _generate_random_map_desc,
+    _map_from_task_config,
+    _normalize_map_desc,
+    _parse_size,
+    _parse_success_rate,
+    _state_count,
+    _tile_at_state,
+    coerce_frozen_lake_state_index,
 )
+
+
+class _FakeFrozenLakeBase(gym.Env):
+    action_space = Discrete(4)
+    observation_space = Discrete(4)
+
+    def __init__(
+        self,
+        *,
+        observation: int = 0,
+        nrow: int = 2,
+        ncol: int = 2,
+        desc=None,
+    ) -> None:
+        super().__init__()
+        self.observation = observation
+        self.nrow = nrow
+        self.ncol = ncol
+        self.desc = desc if desc is not None else [[b"S", b"H"], [b"F", b"G"]]
+        self.s = 0
+        self.lastaction = 2
+
+    def reset(self, *, seed: int | None = None, options=None):
+        _ = seed
+        _ = options
+        return self.s, {"reset": True}
+
+    def step(self, action: int):
+        _ = action
+        return self.observation, 7.0, False, False, {"source": "fake"}
 
 
 def _app() -> QApplication:
@@ -146,6 +192,135 @@ def test_frozen_lake_random_map_rejects_impossible_hole_probability() -> None:
         _generate_random_map_desc(size=4, hole_probability=1.0)
 
 
+def test_frozen_lake_config_helpers_normalize_sizes_maps_and_rewards() -> None:
+    assert _parse_size(1) == 2
+    assert _parse_size("8x8") == 8
+    assert _parse_size("6x") == 6
+    assert _parse_size("invalid", fallback=5) == 5
+
+    assert len(_map_from_task_config({"size": 8})) == 8
+    custom_map = _map_from_task_config({"size": 3})
+    assert custom_map == ["SFF", "FFF", "FFG"]
+
+    normalized = _normalize_map_desc(["SXS", "G", "GGG"], expected_size=3)
+    assert normalized == [
+        [TILE_START, TILE_FROZEN, TILE_FROZEN],
+        [TILE_GOAL, TILE_FROZEN, TILE_FROZEN],
+        [TILE_FROZEN, TILE_FROZEN, TILE_FROZEN],
+    ]
+    assert _normalize_map_desc([], expected_size=2) == [
+        [TILE_START, TILE_FROZEN],
+        [TILE_FROZEN, TILE_GOAL],
+    ]
+
+    rewards = _coerce_reward_config(
+        {
+            "F": "0.5",
+            "tile:H": "-2.0",
+            "tile:G": object(),
+            "unknown": 99.0,
+        }
+    )
+    assert rewards["tile:F"] == pytest.approx(0.5)
+    assert rewards["tile:H"] == pytest.approx(-2.0)
+    assert rewards["tile:G"] == pytest.approx(1.0)
+
+
+def test_frozen_lake_success_rate_and_state_helpers_reject_invalid_values() -> None:
+    class _BadItem:
+        def item(self):
+            raise RuntimeError("cannot scalarize")
+
+    assert _parse_success_rate(None) == pytest.approx(1.0 / 3.0)
+    assert _parse_success_rate("0.75") == pytest.approx(0.75)
+    with pytest.raises(ValueError, match="success_rate"):
+        _parse_success_rate("bad")
+    with pytest.raises(ValueError, match="success_rate"):
+        _parse_success_rate(float("inf"))
+
+    assert coerce_frozen_lake_state_index("7") == 7
+    assert coerce_frozen_lake_state_index(_BadItem()) is None
+    assert coerce_frozen_lake_state_index("7.0") is None
+
+    assert _state_count(type("StateCount", (), {"nrow": 2, "ncol": 3})()) == 6
+    assert _state_count(type("NoStateCount", (), {"nrow": "2", "ncol": 3})()) is None
+
+
+def test_frozen_lake_tile_lookup_handles_bytes_decode_and_missing_desc() -> None:
+    class _BadDecode:
+        def decode(self, encoding: str):
+            _ = encoding
+            raise UnicodeError("bad tile")
+
+        def __str__(self) -> str:
+            return "Z"
+
+    assert _tile_at_state(type("NoDesc", (), {})(), 0) == TILE_FROZEN
+    assert _tile_at_state(_FakeFrozenLakeBase(), 1) == TILE_HOLE
+    assert _tile_at_state(_FakeFrozenLakeBase(desc=[[_BadDecode()]]), 0) == "Z"
+    assert _tile_at_state(_FakeFrozenLakeBase(), 99) == TILE_FROZEN
+
+
+def test_frozen_lake_reward_wrapper_maps_tile_rewards_and_preserves_base_reward_info() -> None:
+    wrapper = FrozenLakeRewardWrapper(
+        _FakeFrozenLakeBase(observation=1),
+        {"tile:H": -3.0},
+    )
+
+    observation, reward, terminated, truncated, info = wrapper.step(0)
+
+    assert observation == 1
+    assert reward == pytest.approx(-3.0)
+    assert terminated is False
+    assert truncated is False
+    assert info["base_reward"] == pytest.approx(7.0)
+    assert info["reward_tile"] == TILE_HOLE
+
+
+def test_frozen_lake_region_wrapper_marks_and_optionally_terminates_outside_region() -> None:
+    wrapper = FrozenLakeRegionWrapper(
+        _FakeFrozenLakeBase(observation=2),
+        region={"row_min": 0, "row_max": 0, "col_min": 0, "col_max": 1},
+        terminate_on_exit=True,
+        outside_reward=-0.5,
+    )
+
+    observation, reward, terminated, _truncated, info = wrapper.step(0)
+
+    assert observation == 2
+    assert reward == pytest.approx(-0.5)
+    assert terminated is True
+    assert info["outside_region"] is True
+
+    ncol_missing_wrapper = FrozenLakeRegionWrapper(
+        _FakeFrozenLakeBase(observation=2, ncol=0),
+        region={"row_min": 0, "row_max": 0, "col_min": 0, "col_max": 1},
+        terminate_on_exit=True,
+        outside_reward=-0.5,
+    )
+    _observation, reward, terminated, _truncated, info = ncol_missing_wrapper.step(0)
+
+    assert reward == pytest.approx(7.0)
+    assert terminated is False
+    assert "outside_region" not in info
+
+
+def test_frozen_lake_start_state_wrapper_validates_range_and_resets_last_action() -> None:
+    base_env = _FakeFrozenLakeBase()
+    wrapper = FrozenLakeStartStateWrapper(base_env, start_state=3)
+
+    observation, info = wrapper.reset(seed=5, options={"ignored": True})
+
+    assert observation == 3
+    assert info["reset"] is True
+    assert info["start_state_override"] == 3
+    assert base_env.s == 3
+    assert base_env.lastaction is None
+
+    with pytest.raises(ValueError, match="out of range"):
+        FrozenLakeStartStateWrapper(_FakeFrozenLakeBase(), start_state=4).reset(seed=5)
+
+
 def test_frozen_lake_extended_env_honors_slippery_success_rate() -> None:
     task = _task_definition()
     task.config["is_slippery"] = True
@@ -193,6 +368,25 @@ def test_frozen_lake_extended_env_can_be_rebuilt_from_task_snapshot() -> None:
         observation, _info = env.reset(seed=3)
         assert env.export_state().state_index == int(observation)
         assert env.task_definition.config["map_desc"] == task.config["map_desc"]
+    finally:
+        env.close()
+
+
+def test_frozen_lake_extended_env_rejects_invalid_state_payloads() -> None:
+    assert FrozenLakeExtendedEnv.from_task_snapshot(None) is None
+
+    task = _task_definition()
+    task.config["start_state"] = "not-a-state"
+    with pytest.raises(ValueError, match="start_state"):
+        FrozenLakeExtendedEnv(task)
+
+    env = FrozenLakeExtendedEnv(_task_definition())
+    try:
+        env.reset(seed=3)
+        with pytest.raises(ValueError, match="Unsupported Frozen Lake state payload"):
+            env.import_state(object())  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="out of range"):
+            env.import_state(999)
     finally:
         env.close()
 

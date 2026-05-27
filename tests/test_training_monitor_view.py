@@ -4,6 +4,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtWidgets import QApplication
 
 from rleditor.core.models import TrainingMetrics
@@ -32,14 +33,35 @@ def test_training_monitor_breakpoints_default_to_pause_and_checkpoint() -> None:
     assert "actions=pause+checkpoint" in view.breakpoint_list.item(0).text()
 
 
-def test_training_monitor_can_build_unlimited_step_config() -> None:
+def test_training_monitor_builds_episode_based_q_learning_config() -> None:
     _app()
     view = TrainingMonitorView()
 
-    view.total_steps_spin.setValue(-1)
+    view.episode_count_spin.setValue(250)
+    view.max_steps_per_episode_spin.setValue(75)
+    view.learning_rate_spin.setValue(0.2)
+    view.discount_factor_spin.setValue(0.95)
+
     config = view.build_config()
 
     assert config.max_steps is None
+    assert config.max_episodes == 250
+    assert config.max_steps_per_episode == 75
+    assert config.learning_rate == pytest.approx(0.2)
+    assert config.gamma == pytest.approx(0.95)
+    assert config.hyperparameters["learning_rate"] == pytest.approx(0.2)
+    assert config.hyperparameters["gamma"] == pytest.approx(0.95)
+
+
+def test_training_monitor_can_build_unlimited_episode_config() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    view.episode_count_spin.setValue(0)
+    config = view.build_config()
+
+    assert config.max_steps is None
+    assert config.max_episodes is None
 
 
 def test_training_monitor_can_select_stable_baselines3_dqn() -> None:

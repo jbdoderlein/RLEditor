@@ -33,6 +33,7 @@ from rleditor.plugins.registry import PluginRegistry
 from rleditor.ui.views.checkpoint_history_view import CheckpointHistoryView
 from rleditor.ui.views.evaluation_view import EvaluationView
 from rleditor.ui.views.episode_inspector_view import EpisodeInspectorView
+from rleditor.ui.interaction_logging import InteractionLogger
 from rleditor.ui.views.task_editor_view import TaskEditorView
 from rleditor.ui.views.task_history_view import TaskHistoryView
 from rleditor.ui.views.training_monitor_view import TrainingMonitorView
@@ -47,12 +48,14 @@ class MainWindow(QMainWindow):
         initial_plugin_id: str,
         initial_tasks: list[TaskDefinition] | None = None,
         project_store: ProjectStore | None = None,
+        interaction_logger: InteractionLogger | None = None,
     ) -> None:
         super().__init__()
         self._registry = registry
         self._task_service = task_service
         self._training_service = training_service
         self._project_store = project_store
+        self._interaction_logger = interaction_logger
         self._loading_project = True
 
         self._current_plugin: EnvironmentPlugin | None = None
@@ -61,6 +64,7 @@ class MainWindow(QMainWindow):
         self._imported_curriculum_queue: deque[tuple[TaskDefinition, RunConfig]] = deque()
         self._imported_curriculum_active = False
         self._imported_curriculum_waiting_for_step = False
+        self._imported_curriculum_checkpoint_stop_pending = False
         self._imported_curriculum_completed_steps = 0
         self._status_busy_sources: set[str] = set()
         self._status_busy_frames = ("|", "/", "-", "\\")
@@ -269,25 +273,50 @@ class MainWindow(QMainWindow):
 
         config.evaluation_policy = self.evaluation_view.build_evaluation_policy()
         self.episode_view.clear_episodes()
+        selected_checkpoint = self.history_view.selected_checkpoint()
+        start_from_scratch = self.history_view.start_from_scratch_selected()
         try:
             if len(selected_tasks) > 1:
                 self._training_service.start_many(
                     selected_tasks,
                     config,
-                    initial_checkpoint=self.history_view.selected_checkpoint(),
-                    start_from_scratch=self.history_view.start_from_scratch_selected(),
+                    initial_checkpoint=selected_checkpoint,
+                    start_from_scratch=start_from_scratch,
                     run_in_background=True,
                 )
                 self.statusBar().showMessage(f"Parallel training started on {len(selected_tasks)} tasks")
+                mode = "parallel"
             else:
                 self._training_service.start(
                     primary_task,
                     config,
-                    initial_checkpoint=self.history_view.selected_checkpoint(),
-                    start_from_scratch=self.history_view.start_from_scratch_selected(),
+                    initial_checkpoint=selected_checkpoint,
+                    start_from_scratch=start_from_scratch,
                     run_in_background=True,
                 )
                 self.statusBar().showMessage("Training started")
+                mode = "single"
+            self._log_interaction(
+                "training_started",
+                mode=mode,
+                tasks=[
+                    {
+                        "task_id": task.task_id,
+                        "name": task.name,
+                        "environment_id": task.environment_id,
+                    }
+                    for task in selected_tasks
+                ],
+                algorithm=config.algorithm,
+                max_steps=config.max_steps,
+                max_episodes=config.max_episodes,
+                max_steps_per_episode=config.max_steps_per_episode,
+                seed=config.seed,
+                initial_checkpoint_id=(
+                    selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
+                ),
+                start_from_scratch=start_from_scratch,
+            )
             self._set_status_busy("training", True)
         except RuntimeError as exc:
             self.statusBar().showMessage(str(exc))
@@ -298,16 +327,22 @@ class MainWindow(QMainWindow):
         if not self._imported_curriculum_active or not self._imported_curriculum_waiting_for_step:
             return
         if status == TrainingStatus.FINISHED:
+            self._imported_curriculum_checkpoint_stop_pending = False
             self._imported_curriculum_waiting_for_step = False
             QTimer.singleShot(0, self._start_next_imported_curriculum_step)
         elif status == TrainingStatus.STOPPED:
             self._imported_curriculum_queue.clear()
             self._imported_curriculum_active = False
             self._imported_curriculum_waiting_for_step = False
+            self._imported_curriculum_checkpoint_stop_pending = False
             self._set_status_busy("curriculum", False)
             self.statusBar().showMessage("Curriculum execution stopped")
         elif status == TrainingStatus.PAUSED:
             self._set_status_busy("curriculum", False)
+            if self._imported_curriculum_checkpoint_stop_pending:
+                self._imported_curriculum_checkpoint_stop_pending = False
+                self.statusBar().showMessage("Curriculum checkpoint reached; stopping imported run")
+                self._training_service.stop()
 
     def _on_metrics_updated(self, metrics: TrainingMetrics) -> None:
         self.training_view.set_metrics(metrics)
@@ -318,6 +353,24 @@ class MainWindow(QMainWindow):
     def _on_breakpoint_triggered(self, event) -> None:
         self.training_view.set_breakpoint_event(event.message)
         self.statusBar().showMessage(event.message)
+        self._log_interaction(
+            "breakpoint_triggered",
+            message=getattr(event, "message", ""),
+            step=getattr(event, "step", None),
+            episode=getattr(event, "episode", None),
+        )
+        actions = set(getattr(event.breakpoint, "actions", []))
+        if (
+            self._imported_curriculum_active
+            and self._imported_curriculum_waiting_for_step
+            and "checkpoint" in actions
+            and "stop" not in actions
+        ):
+            if "pause" in actions:
+                self._imported_curriculum_checkpoint_stop_pending = True
+            else:
+                self.statusBar().showMessage("Curriculum checkpoint reached; stopping imported run")
+                self._training_service.stop()
 
     def _on_episode_captured(self, trace: EpisodeTrace) -> None:
         self.episode_view.set_episode(trace, focus=self.tabs.currentWidget() is self.episode_tab)
@@ -360,6 +413,11 @@ class MainWindow(QMainWindow):
         finally:
             self._set_status_busy("evaluation", False)
         self.statusBar().showMessage(f"Evaluation completed for {evaluated_checkpoint.checkpoint_id}")
+        self._log_interaction(
+            "checkpoint_evaluated",
+            checkpoint_id=evaluated_checkpoint.checkpoint_id,
+            policy=policy,
+        )
 
     def _on_curriculum_import_requested(self, payload: object) -> None:
         try:
@@ -387,9 +445,15 @@ class MainWindow(QMainWindow):
         self._imported_curriculum_queue = deque(curriculum_steps)
         self._imported_curriculum_active = True
         self._imported_curriculum_waiting_for_step = False
+        self._imported_curriculum_checkpoint_stop_pending = False
         self._imported_curriculum_completed_steps = 0
         self._set_status_busy("curriculum", True)
         self.episode_view.clear_episodes()
+        self._log_interaction(
+            "curriculum_import_started",
+            task_count=len(imported_tasks),
+            step_count=len(curriculum_steps),
+        )
         self._start_next_imported_curriculum_step()
 
     def _refresh_history_view(self) -> None:
@@ -621,6 +685,14 @@ class MainWindow(QMainWindow):
                 }
             )
         config.metadata["imported_curriculum_step"] = True
+        for rule in config.breakpoints:
+            actions = set(rule.actions)
+            if (
+                "checkpoint" in actions
+                and "pause" not in actions
+                and "stop" not in actions
+            ):
+                rule.actions.append("pause")
         return config
 
     def _evaluation_policy_from_curriculum_payload(
@@ -655,6 +727,7 @@ class MainWindow(QMainWindow):
             completed = self._imported_curriculum_completed_steps
             self._imported_curriculum_active = False
             self._imported_curriculum_waiting_for_step = False
+            self._imported_curriculum_checkpoint_stop_pending = False
             self._set_status_busy("curriculum", False)
             self.statusBar().showMessage(f"Curriculum execution completed: {completed} step(s)")
             return
@@ -676,6 +749,7 @@ class MainWindow(QMainWindow):
             self._imported_curriculum_queue.clear()
             self._imported_curriculum_active = False
             self._imported_curriculum_waiting_for_step = False
+            self._imported_curriculum_checkpoint_stop_pending = False
             self._set_status_busy("curriculum", False)
             self.statusBar().showMessage(f"Curriculum execution failed: {exc}")
             return
@@ -747,6 +821,7 @@ class MainWindow(QMainWindow):
         if self._save_project():
             assert self._project_store is not None
             self.statusBar().showMessage(f"Project saved: {self._project_store.project_path}")
+            self._log_interaction("project_saved", path=str(self._project_store.project_path))
 
     def _save_project(self) -> bool:
         if self._loading_project or self._project_store is None or self._current_plugin is None:
@@ -763,6 +838,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Could not save project state: {exc}")
             return False
         return True
+
+    def _log_interaction(self, event: str, **payload: object) -> None:
+        if self._interaction_logger is None:
+            return
+        self._interaction_logger.log(event, **payload)
 
     def _workspace_index_for_task(self, task: TaskDefinition) -> int | None:
         for index, workspace_task in enumerate(self._task_workspace):

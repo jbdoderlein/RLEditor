@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from rleditor.application.services import TaskService, TrainingService
+from rleditor.application.services import TaskService, TrainingHistorySnapshot, TrainingService
 from rleditor.core.models import (
     Breakpoint,
     Checkpoint,
@@ -42,6 +42,15 @@ class _DummyBackend:
 
     def create_env(self, task: TaskDefinition):
         return object()
+
+
+class _NoCreateBackend:
+    def default_task(self) -> TaskDefinition:
+        return TaskDefinition(
+            environment_id="no_create_env",
+            name="No Create Task",
+            task_id="task_no_create",
+        )
 
 
 class _TinyBackend:
@@ -356,6 +365,29 @@ def test_task_service_derive_task_propagates_lineage_and_metadata() -> None:
     assert derived_task.termination_config["max_steps"] == 24
     assert derived_task.metadata["owner"] == "research"
     assert derived_task.metadata["derived_from"] == "task_main"
+
+
+def test_task_service_rebuilds_task_from_snapshot_with_copied_payloads() -> None:
+    service = TaskService(PluginRegistry())
+    snapshot = TaskSnapshot(
+        environment_id="tiny_env",
+        task_name="Snapshot Task",
+        task_id="task_snapshot",
+        task_config={"layout": ["S", "G"]},
+        reward_config={"goal": 1.0},
+        termination_config={"max_steps": 12},
+        metadata={"tags": ["saved"]},
+    )
+
+    task = service.task_from_snapshot(snapshot)
+    task.config["layout"].append("H")
+    task.metadata["tags"].append("mutated")
+
+    assert task.environment_id == "tiny_env"
+    assert task.name == "Snapshot Task"
+    assert task.task_id == "task_snapshot"
+    assert snapshot.task_config["layout"] == ["S", "G"]
+    assert snapshot.metadata["tags"] == ["saved"]
 
 
 def test_training_runner_adds_run_id_and_seed_to_episode_trace_task_snapshot() -> None:
@@ -682,6 +714,98 @@ def test_training_service_manually_evaluates_selected_checkpoint_with_fixed_seed
     assert [trace.metadata["seed"] for trace in evaluation_episodes] == [101, 102]
 
 
+def test_training_service_evaluate_checkpoint_rejects_unknown_or_missing_learner_state() -> None:
+    service = TrainingService(_history_registry())
+
+    with pytest.raises(RuntimeError, match="Unknown checkpoint"):
+        service.evaluate_checkpoint("checkpoint_missing", {})
+
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_no_learner",
+        label="No Learner",
+        created_at="now",
+        reason="imported",
+    )
+    service.import_checkpoint(checkpoint)
+
+    with pytest.raises(RuntimeError, match="does not contain a learner state"):
+        service.evaluate_checkpoint("checkpoint_no_learner", {})
+
+
+def test_training_service_records_evaluation_error_and_clears_stale_eval_traces() -> None:
+    service = TrainingService(_history_registry())
+    evaluation_task = TaskDefinition(environment_id="tiny_env", name="Bad Evaluation Task", task_id="task_eval_bad")
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_bad_eval",
+        label="Bad Eval",
+        created_at="now",
+        reason="imported",
+        metadata={
+            "algorithm": "q_learning",
+            "learner_state": {
+                "algorithm": "q_learning",
+                "q_values": [],
+            },
+        },
+    )
+    service.import_checkpoint(checkpoint)
+    service._episodes_by_run["eval_checkpoint_bad_eval"] = [
+        EpisodeTrace(episode_id=1, run_id="stale", total_reward=0.0, success=False)
+    ]
+    service._pending_episodes_by_run["eval_checkpoint_bad_eval"] = [
+        EpisodeTrace(episode_id=2, run_id="stale", total_reward=0.0, success=False)
+    ]
+    service._run_task_snapshots["eval_checkpoint_bad_eval"] = TaskSnapshot(
+        environment_id="tiny_env",
+        task_name="Stale Eval",
+    )
+
+    with pytest.raises(RuntimeError, match="Evaluation episode count is invalid"):
+        service.evaluate_checkpoint(
+            "checkpoint_bad_eval",
+            {
+                "task": evaluation_task.to_dict(),
+                "episode_count": "bad",
+            },
+        )
+
+    snapshot = service.history_snapshot()
+    evaluated_checkpoint = snapshot.checkpoints[-1]
+    assert evaluated_checkpoint.metadata["evaluation_error"] == "Evaluation episode count is invalid."
+    assert "eval_checkpoint_bad_eval" not in snapshot.episodes_by_run
+    assert "eval_checkpoint_bad_eval" not in service._pending_episodes_by_run
+    assert "eval_checkpoint_bad_eval" not in snapshot.run_task_snapshots
+
+
+def test_training_service_reports_invalid_evaluation_seed_before_running_env() -> None:
+    service = TrainingService(_history_registry())
+    evaluation_task = TaskDefinition(environment_id="tiny_env", name="Seed Evaluation Task", task_id="task_eval_seed")
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_bad_seed",
+        label="Bad Seed",
+        created_at="now",
+        reason="imported",
+        metadata={
+            "algorithm": "q_learning",
+            "learner_state": {
+                "algorithm": "q_learning",
+                "q_values": [],
+            },
+        },
+    )
+    service.import_checkpoint(checkpoint)
+
+    with pytest.raises(RuntimeError, match="Evaluation seed is invalid"):
+        service.evaluate_checkpoint(
+            "checkpoint_bad_seed",
+            {
+                "task": evaluation_task.to_dict(),
+                "episode_count": 1,
+                "seed": "bad",
+            },
+        )
+
+
 def test_training_service_raises_without_simulated_fallback_for_unknown_env() -> None:
     service = TrainingService(_history_registry())
     task = TaskDefinition(environment_id="missing_env", name="Missing Env Task", task_id="task_missing")
@@ -787,6 +911,136 @@ def test_training_service_history_snapshot_can_skip_deepcopy_for_ui_refresh() ->
     assert deep_snapshot.checkpoints[0] is not checkpoint
     assert deep_snapshot.episodes_by_run[run.run_id][0] is not trace
     assert deep_snapshot.run_task_snapshots[run.run_id] is not task_snapshot
+
+
+def test_training_service_load_history_resets_live_state_and_copies_snapshot() -> None:
+    service = TrainingService(_history_registry())
+    task_snapshot = TaskSnapshot(
+        environment_id="tiny_env",
+        task_name="Loaded Task",
+        task_id="task_loaded",
+    )
+    run = TrainingRun(
+        run_id="run_loaded",
+        task_id="task_loaded",
+        status=TrainingStatus.FINISHED,
+    )
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_007",
+        label="Loaded Checkpoint",
+        created_at="now",
+        reason="loaded",
+        run_id=run.run_id,
+        task_id="task_loaded",
+        task_snapshot=task_snapshot,
+    )
+    trace = EpisodeTrace(
+        episode_id=1,
+        run_id=run.run_id,
+        total_reward=1.0,
+        success=True,
+        task_snapshot=task_snapshot,
+    )
+    snapshot = TrainingHistorySnapshot(
+        runs=[run],
+        checkpoints=[checkpoint],
+        episodes_by_run={run.run_id: [trace]},
+        run_task_snapshots={run.run_id: task_snapshot},
+    )
+    notifications: list[None] = []
+    service.history_changed.connect(lambda: notifications.append(None))
+
+    service.load_history(snapshot)
+    run.status = TrainingStatus.STOPPED
+    checkpoint.label = "Mutated"
+    trace.total_reward = -1.0
+
+    loaded = service.history_snapshot(deep=False)
+    assert notifications
+    assert service.status == TrainingStatus.IDLE
+    assert service._checkpoint_counter == 7
+    assert loaded.runs[0].status == TrainingStatus.FINISHED
+    assert loaded.checkpoints[0].label == "Loaded Checkpoint"
+    assert loaded.episodes_by_run["run_loaded"][0].total_reward == 1.0
+    assert service._pending_episodes_by_run == {"run_loaded": []}
+
+
+def test_training_service_rejects_history_and_checkpoint_import_while_live() -> None:
+    service = TrainingService(_history_registry())
+    task = TaskDefinition(environment_id="tiny_env", name="Live Task", task_id="task_live")
+    config = RunConfig(max_steps=20, seed=61)
+    empty_snapshot = TrainingHistorySnapshot(
+        runs=[],
+        checkpoints=[],
+        episodes_by_run={},
+        run_task_snapshots={},
+    )
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_001",
+        label="Imported",
+        created_at="now",
+        reason="imported",
+    )
+
+    service.start(task, config)
+    try:
+        with pytest.raises(RuntimeError, match="history while training is active"):
+            service.load_history(empty_snapshot)
+        with pytest.raises(RuntimeError, match="checkpoint while training is active"):
+            service.import_checkpoint(checkpoint)
+    finally:
+        service.stop()
+
+
+def test_training_service_pause_resume_and_stop_update_aggregate_status() -> None:
+    service = TrainingService(_history_registry())
+    task = TaskDefinition(environment_id="tiny_env", name="Manual Control Task", task_id="task_control")
+    config = RunConfig(max_steps=20, seed=67)
+
+    service.start(task, config)
+    assert service.status == TrainingStatus.RUNNING
+
+    service.pause()
+    assert service.status == TrainingStatus.PAUSED
+
+    service.resume()
+    assert service.status == TrainingStatus.RUNNING
+
+    service.stop()
+    assert service.status == TrainingStatus.STOPPED
+
+
+def test_training_service_start_noops_for_empty_task_list() -> None:
+    service = TrainingService(_history_registry())
+
+    service.start_many([], RunConfig(max_steps=5))
+
+    assert service.status == TrainingStatus.IDLE
+    assert service.history_snapshot().runs == []
+
+
+def test_training_service_rejects_start_without_registry_or_backend_factory() -> None:
+    task = TaskDefinition(environment_id="tiny_env", name="No Registry Task", task_id="task_no_registry")
+
+    with pytest.raises(RuntimeError, match="no environment registry"):
+        TrainingService().start(task, RunConfig(max_steps=5))
+
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="no_create_env",
+            display_name="No Create Env",
+            description="Missing create_env test plugin",
+            backend=_NoCreateBackend(),
+            gui_extension=None,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="does not expose create_env"):
+        TrainingService(registry).start(
+            TaskDefinition(environment_id="no_create_env", name="No Create Task", task_id="task_no_create"),
+            RunConfig(max_steps=5),
+        )
 
 
 def test_training_service_chains_checkpoints_within_one_run() -> None:

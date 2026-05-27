@@ -67,6 +67,7 @@ class CheckpointGraphWidget(QWidget):
         self._nodes: dict[str, _LineageNode] = {}
         self._edges: list[_LineageEdge] = []
         self._selected_node_id: str | None = None
+        self._selected_node_ids: list[str] = []
         self._selected_edge_id: str | None = None
         self._content_size = QSize(900, 520)
         self.setMinimumSize(220, 140)
@@ -76,11 +77,22 @@ class CheckpointGraphWidget(QWidget):
         return self._selected_node_id
 
     @property
+    def selected_node_ids(self) -> tuple[str, ...]:
+        return tuple(self._selected_node_ids)
+
+    @property
     def selected_edge_id(self) -> str | None:
         return self._selected_edge_id
 
     def node_for_id(self, node_id: str) -> _LineageNode | None:
         return self._nodes.get(node_id)
+
+    def selected_nodes(self) -> list[_LineageNode]:
+        return [
+            self._nodes[node_id]
+            for node_id in self._selected_node_ids
+            if node_id in self._nodes
+        ]
 
     def edge_for_id(self, edge_id: str) -> _LineageEdge | None:
         for edge in self._edges:
@@ -88,11 +100,38 @@ class CheckpointGraphWidget(QWidget):
                 return edge
         return None
 
-    def select_node(self, node_id: str) -> None:
+    def select_node(self, node_id: str, *, additive: bool = False, toggle: bool = False) -> None:
         if node_id not in self._nodes:
             self._selected_node_id = None
+            self._selected_node_ids = []
             return
-        self._selected_node_id = node_id
+
+        if additive:
+            selected_node_ids = list(self._selected_node_ids)
+            if node_id in selected_node_ids:
+                if toggle:
+                    selected_node_ids.remove(node_id)
+                else:
+                    selected_node_ids.remove(node_id)
+                    selected_node_ids.append(node_id)
+            else:
+                selected_node_ids.append(node_id)
+            self._selected_node_ids = selected_node_ids
+            self._selected_node_id = selected_node_ids[-1] if selected_node_ids else None
+        else:
+            self._selected_node_ids = [node_id]
+            self._selected_node_id = node_id
+
+        self._selected_edge_id = None
+        self.update()
+
+    def select_nodes(self, node_ids: list[str] | tuple[str, ...]) -> None:
+        selected_node_ids: list[str] = []
+        for node_id in node_ids:
+            if node_id in self._nodes and node_id not in selected_node_ids:
+                selected_node_ids.append(node_id)
+        self._selected_node_ids = selected_node_ids
+        self._selected_node_id = selected_node_ids[-1] if selected_node_ids else None
         self._selected_edge_id = None
         self.update()
 
@@ -101,10 +140,13 @@ class CheckpointGraphWidget(QWidget):
             self._selected_edge_id = None
             return
         self._selected_edge_id = edge_id
+        self._selected_node_id = None
+        self._selected_node_ids = []
         self.update()
 
     def clear_selection(self) -> None:
         self._selected_node_id = None
+        self._selected_node_ids = []
         self._selected_edge_id = None
         self.update()
 
@@ -120,7 +162,16 @@ class CheckpointGraphWidget(QWidget):
         position = event.position()
         for node in reversed(list(self._nodes.values())):
             if node.rect.contains(position):
-                self.select_node(node.node_id)
+                modifiers = event.modifiers()
+                additive = bool(
+                    modifiers
+                    & (
+                        Qt.KeyboardModifier.ControlModifier
+                        | Qt.KeyboardModifier.ShiftModifier
+                    )
+                )
+                toggle = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+                self.select_node(node.node_id, additive=additive, toggle=toggle)
                 self.node_selected.emit(node)
                 return
 
@@ -164,7 +215,7 @@ class CheckpointGraphWidget(QWidget):
             painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, self._edge_label(edge))
 
         for node in self._nodes.values():
-            selected = self._selected_node_id == node.node_id
+            selected = node.node_id in self._selected_node_ids
             if node.kind == "root":
                 fill = QColor("#f1f5f9")
                 border = QColor("#0f766e") if selected else QColor("#94a3b8")
@@ -443,9 +494,9 @@ class CheckpointHistoryView(QWidget):
         self.selection_label = QLabel("Select a training edge to inspect a run.")
         self.selection_label.setWordWrap(True)
 
-        checkpoint_group = QGroupBox("Node Details", right_panel)
-        checkpoint_layout = QFormLayout(checkpoint_group)
-        self.checkpoint_details = QTextEdit(checkpoint_group)
+        self.details_group = QGroupBox("Node Details", right_panel)
+        checkpoint_layout = QFormLayout(self.details_group)
+        self.checkpoint_details = QTextEdit(self.details_group)
         self.checkpoint_details.setReadOnly(True)
         self.checkpoint_details.setMinimumHeight(80)
         checkpoint_layout.addRow(self.checkpoint_details)
@@ -487,7 +538,7 @@ class CheckpointHistoryView(QWidget):
         right_layout.addWidget(self.training_source_label)
         right_layout.addLayout(actions_layout)
         right_layout.addWidget(self.selection_label)
-        right_layout.addWidget(checkpoint_group)
+        right_layout.addWidget(self.details_group)
         right_layout.addWidget(self.segment_group, 1)
 
         splitter.addWidget(left_panel)
@@ -530,25 +581,31 @@ class CheckpointHistoryView(QWidget):
         return node is not None and node.kind == "root"
 
     def set_history(self, snapshot: TrainingHistorySnapshot) -> None:
-        selected_node_id = self._selected_start_node_id
+        selected_node_ids = list(self.graph_widget.selected_node_ids)
+        if not selected_node_ids and self._selected_start_node_id is not None:
+            selected_node_ids = [self._selected_start_node_id]
         selected_edge_id = self.graph_widget.selected_edge_id
         self._snapshot = snapshot
         self.graph_widget.set_history(snapshot)
 
-        resolved_node = None
-        if selected_node_id is not None:
-            resolved_node = self.graph_widget.node_for_id(selected_node_id)
-        if resolved_node is None:
+        resolved_nodes = [
+            node
+            for node_id in selected_node_ids
+            if (node := self.graph_widget.node_for_id(node_id)) is not None
+        ]
+        if not resolved_nodes:
             latest_checkpoint = self._latest_checkpoint()
             if latest_checkpoint is not None:
-                selected_node_id = latest_checkpoint.checkpoint_id
-                resolved_node = self.graph_widget.node_for_id(selected_node_id)
-        self._selected_start_node_id = selected_node_id if resolved_node is not None else None
+                latest_node = self.graph_widget.node_for_id(latest_checkpoint.checkpoint_id)
+                if latest_node is not None:
+                    resolved_nodes = [latest_node]
+        self._selected_start_node_id = resolved_nodes[-1].node_id if resolved_nodes else None
 
-        if resolved_node is not None:
-            self.graph_widget.select_node(resolved_node.node_id)
-            self._show_node_details(resolved_node)
+        if resolved_nodes:
+            self.graph_widget.select_nodes([node.node_id for node in resolved_nodes])
+            self._show_node_details(resolved_nodes[-1])
         else:
+            self.graph_widget.select_nodes([])
             self._render_empty_selection()
 
         if selected_edge_id is not None:
@@ -558,10 +615,11 @@ class CheckpointHistoryView(QWidget):
                 self._show_edge_details(edge)
                 return
 
-        if resolved_node is None or resolved_node.kind == "root":
+        if not resolved_nodes or resolved_nodes[-1].kind == "root":
             self._render_empty_segment_selection()
 
     def _render_empty_selection(self) -> None:
+        self.details_group.setTitle("Node Details")
         if self._snapshot.checkpoints:
             self.training_source_label.setText("Training start checkpoint: pending selection")
         else:
@@ -593,7 +651,29 @@ class CheckpointHistoryView(QWidget):
         self.inspect_episode_button.setEnabled(False)
 
     def _show_node_details(self, node: _LineageNode) -> None:
+        self.details_group.setTitle("Node Details")
         self._selected_start_node_id = node.node_id
+        selected_nodes = self.graph_widget.selected_nodes()
+        if node.node_id not in {selected_node.node_id for selected_node in selected_nodes}:
+            selected_nodes = [node]
+        selected_checkpoint_nodes = [
+            selected_node
+            for selected_node in selected_nodes
+            if selected_node.checkpoint is not None
+        ]
+        if len(selected_checkpoint_nodes) > 1:
+            self.training_source_label.setText(
+                f"Training start checkpoint: {node.checkpoint.label if node.checkpoint is not None else 'pending selection'}"
+            )
+            self.selection_label.setText(f"Selected checkpoints: {len(selected_checkpoint_nodes)}")
+            self._set_checkpoint_comparison_details(selected_checkpoint_nodes)
+            self._set_export_buttons_enabled(node.checkpoint is not None)
+            if node.checkpoint is not None:
+                self._set_checkpoint_evaluation_episodes(node.checkpoint)
+            else:
+                self._render_empty_segment_selection()
+            return
+
         if node.kind == "root":
             self.training_source_label.setText("Training start checkpoint: scratch")
             self._set_root_details(node)
@@ -612,39 +692,17 @@ class CheckpointHistoryView(QWidget):
         self._set_checkpoint_evaluation_episodes(checkpoint)
 
     def _show_edge_details(self, edge: _LineageEdge) -> None:
+        self.details_group.setTitle("Training Details")
         self.segment_group.setTitle("Training Run")
         checkpoint = edge.target_checkpoint
-        task_snapshot = edge.task_snapshot or checkpoint.task_snapshot
-        task_name = task_snapshot.task_name if task_snapshot is not None else (checkpoint.task_name or "unknown")
-        environment_id = task_snapshot.environment_id if task_snapshot is not None else "unknown"
         run = edge.run
         self._set_export_buttons_enabled(True)
         self.selection_label.setText(
             f"Selected training run: {run.run_id if run is not None else checkpoint.run_id or 'unknown'}"
         )
-        self._set_checkpoint_details(edge.target_checkpoint, heading="Checkpoint produced by this run")
-        start_label = edge.source_checkpoint.checkpoint_id if edge.source_checkpoint is not None else "scratch"
+        self._set_training_run_details(edge)
 
-        lines = [
-            f"Run ID: {run.run_id if run is not None else checkpoint.run_id or 'unknown'}",
-            f"Start node: {start_label}",
-            f"Target checkpoint: {checkpoint.checkpoint_id}",
-            f"Task: {task_name}",
-            f"Environment: {environment_id}",
-            f"Recorded episodes available here: {len(edge.episodes)}",
-        ]
-        if run is not None:
-            lines.extend(
-                [
-                    f"Run status: {run.status.value}",
-                    f"Started at: {run.started_at or 'unknown'}",
-                    f"Ended at: {run.ended_at or 'in progress'}",
-                    f"Parent checkpoint: {run.parent_checkpoint_id or 'scratch'}",
-                    f"Algorithm: {run.metadata.get('algorithm', 'unknown')}",
-                    f"Seed: {run.metadata.get('seed', 'unknown')}",
-                ]
-            )
-        self.segment_details.setPlainText("\n".join(lines))
+        self.segment_details.setPlainText(f"Recorded training episodes: {len(edge.episodes)}")
 
         self.episode_list.clear()
         self._current_segment_episodes = list(edge.episodes)
@@ -1263,66 +1321,90 @@ class CheckpointHistoryView(QWidget):
             )
         )
 
-    def _set_checkpoint_details(self, checkpoint: Checkpoint, *, heading: str) -> None:
-        task_snapshot = checkpoint.task_snapshot
-        environment_id = task_snapshot.environment_id if task_snapshot is not None else "unknown"
+    def _set_training_run_details(self, edge: _LineageEdge) -> None:
+        checkpoint = edge.target_checkpoint
+        task_snapshot = edge.task_snapshot or checkpoint.task_snapshot
+        run = edge.run
+        run_config = self._run_config_payload(run) or {}
         task_name = task_snapshot.task_name if task_snapshot is not None else (checkpoint.task_name or "unknown")
-        rows = [
-            ("Checkpoint ID", checkpoint.checkpoint_id),
-            ("Created at", checkpoint.created_at),
-            ("Reason", checkpoint.reason),
-            ("Run ID", checkpoint.run_id or "unknown"),
-            ("Task", task_name),
-            ("Environment", environment_id),
-            ("Episode", str(checkpoint.episode)),
-            ("Step", str(checkpoint.step)),
-            ("Parent checkpoint", checkpoint.parent_checkpoint_id or "scratch"),
+        setup_rows = [
+            ("Task name", task_name),
+            ("Recorded episodes", str(len(edge.episodes))),
+            (
+                "Max steps / episode",
+                self._format_optional_value(run_config.get("max_steps_per_episode"), empty="no limit"),
+            ),
+            ("Episodes", self._format_optional_value(run_config.get("max_episodes"), empty="no limit")),
         ]
-        evaluation = checkpoint.metadata.get("evaluation")
-        if isinstance(evaluation, dict):
-            rows.extend(
-                [
-                    ("Evaluation task", str(evaluation.get("task_name", "unknown"))),
-                    ("Evaluation run ID", str(evaluation.get("run_id", "unknown"))),
-                    ("Evaluation episodes", str(evaluation.get("episode_count", "unknown"))),
-                    (
-                        "Evaluation seed",
-                        str(evaluation.get("seed")) if evaluation.get("seed") is not None else "random",
-                    ),
-                ]
-            )
-        evaluation_error = checkpoint.metadata.get("evaluation_error")
-        if evaluation_error is not None:
-            rows.append(("Evaluation error", str(evaluation_error)))
 
-        metrics = checkpoint.metadata.get("evaluation_metrics")
-        metrics_heading = "Evaluation metrics"
-        if not isinstance(metrics, dict) or not metrics:
-            metrics = checkpoint.metadata.get("training_metrics")
-            metrics_heading = "Recorded training metrics"
-        metric_rows: list[tuple[str, str]] = []
-        if isinstance(metrics, dict) and metrics:
-            metric_rows = [
-                ("Mean reward", f"{float(metrics.get('mean_reward', 0.0)):.3f}"),
-                ("Success rate", f"{float(metrics.get('success_rate', 0.0)) * 100.0:.1f}%"),
-                ("Episode return (mean)", f"{float(metrics.get('episode_reward_mean', 0.0)):.3f}"),
-                ("Episode length (mean)", f"{float(metrics.get('episode_length_mean', 0.0)):.3f}"),
-                ("Exploration rate", f"{float(metrics.get('exploration_rate', 0.0)) * 100.0:.1f}%"),
-                ("TD error", self._format_metric_value(metrics.get("value_loss"))),
-                ("Policy loss", self._format_metric_value(metrics.get("policy_loss"))),
-            ]
-        else:
-            metric_rows = []
+        metrics = checkpoint.metadata.get("training_metrics")
+        if (not isinstance(metrics, dict) or not metrics) and run is not None:
+            metrics = run.metadata.get("latest_metrics")
 
         self.checkpoint_details.setHtml(
-            self._details_panel_html(
-                heading=heading,
-                rows=rows,
-                metrics_heading=metrics_heading,
-                metric_rows=metric_rows,
-                metrics_empty_message="No performance snapshot is available for this checkpoint.",
+            self._summary_panel_html(
+                heading="Selected training run",
+                columns=[
+                    ("Training setup", setup_rows),
+                    (
+                        "Training results",
+                        self._summary_metric_rows(metrics, fallback_episode=checkpoint.episode),
+                    ),
+                ],
             )
         )
+
+    def _set_checkpoint_comparison_details(self, nodes: list[_LineageNode]) -> None:
+        columns: list[tuple[str, list[tuple[str, str]]]] = []
+        for node in nodes:
+            checkpoint = node.checkpoint
+            if checkpoint is None:
+                continue
+            columns.append(
+                (
+                    self._checkpoint_comparison_title(checkpoint),
+                    self._checkpoint_result_rows(checkpoint),
+                )
+            )
+
+        self.checkpoint_details.setHtml(
+            self._comparison_panel_html(
+                heading="Selected checkpoints",
+                columns=columns,
+            )
+        )
+
+    def _set_checkpoint_details(self, checkpoint: Checkpoint, *, heading: str) -> None:
+        result_heading, rows = self._checkpoint_result_summary(checkpoint)
+        self.checkpoint_details.setHtml(
+            self._summary_panel_html(
+                heading=heading,
+                columns=[
+                    (result_heading, rows),
+                ],
+            )
+        )
+
+    def _checkpoint_result_summary(self, checkpoint: Checkpoint) -> tuple[str, list[tuple[str, str]]]:
+        evaluation = checkpoint.metadata.get("evaluation")
+        metrics = checkpoint.metadata.get("evaluation_metrics")
+        result_heading = "Evaluation results"
+        fallback_episode = evaluation.get("episode_count") if isinstance(evaluation, dict) else checkpoint.episode
+        if not isinstance(metrics, dict) or not metrics:
+            metrics = checkpoint.metadata.get("training_metrics")
+            result_heading = "Training results"
+            fallback_episode = checkpoint.episode
+        return result_heading, self._summary_metric_rows(metrics, fallback_episode=fallback_episode)
+
+    def _checkpoint_result_rows(self, checkpoint: Checkpoint) -> list[tuple[str, str]]:
+        _heading, rows = self._checkpoint_result_summary(checkpoint)
+        return rows
+
+    def _checkpoint_comparison_title(self, checkpoint: Checkpoint) -> str:
+        label = checkpoint.label.strip() if checkpoint.label else checkpoint.checkpoint_id
+        if len(label) > 24:
+            return label[:21] + "..."
+        return label
 
     def _details_panel_html(
         self,
@@ -1379,10 +1461,128 @@ class CheckpointHistoryView(QWidget):
             "</table>"
         )
 
-    def _format_metric_value(self, value: object) -> str:
+    def _summary_panel_html(
+        self,
+        *,
+        heading: str,
+        columns: list[tuple[str, list[tuple[str, str]]]],
+    ) -> str:
+        parts = [
+            "<div style='font-family: Sans-Serif; color: #0f172a;'>",
+            f"<div style='font-weight: 700; margin-bottom: 8px;'>{escape(heading)}</div>",
+        ]
+
+        if len(columns) == 1:
+            title, rows = columns[0]
+            parts.append(self._summary_column_html(title, rows))
+        else:
+            cells = []
+            width = 100.0 / max(len(columns), 1)
+            for title, rows in columns:
+                cells.append(
+                    "<td style='vertical-align: top; padding-right: 8px; "
+                    f"width: {width:.0f}%;'>"
+                    f"{self._summary_column_html(title, rows)}"
+                    "</td>"
+                )
+            parts.append(
+                "<table cellspacing='0' cellpadding='0' style='width: 100%; border-collapse: collapse;'>"
+                f"<tr>{''.join(cells)}</tr>"
+                "</table>"
+            )
+
+        parts.append("</div>")
+        return "".join(parts)
+
+    def _summary_column_html(self, title: str, rows: list[tuple[str, str]]) -> str:
+        return (
+            f"<div style='font-weight: 700; margin-bottom: 6px;'>{escape(title)}</div>"
+            f"{self._table_html(rows)}"
+        )
+
+    def _comparison_panel_html(
+        self,
+        *,
+        heading: str,
+        columns: list[tuple[str, list[tuple[str, str]]]],
+    ) -> str:
+        return (
+            "<div style='font-family: Sans-Serif; color: #0f172a;'>"
+            f"<div style='font-weight: 700; margin-bottom: 8px;'>{escape(heading)}</div>"
+            f"{self._comparison_table_html(columns)}"
+            "</div>"
+        )
+
+    def _comparison_table_html(self, columns: list[tuple[str, list[tuple[str, str]]]]) -> str:
+        if not columns:
+            return "<div style='color: #64748b;'>No checkpoint metrics are available.</div>"
+
+        labels = ["Episode", "Success rate", "Mean reward", "Episode length"]
+        header_cells = [
+            "<td style='padding: 6px 10px; border: 1px solid #dbe4f0; "
+            "background: #f8fafc; font-weight: 700; color: #334155;'>Metric</td>"
+        ]
+        for title, _rows in columns:
+            header_cells.append(
+                "<td style='padding: 6px 10px; border: 1px solid #dbe4f0; "
+                "background: #f8fafc; font-weight: 700; color: #334155;'>"
+                f"{escape(title)}</td>"
+            )
+
+        table_rows = [f"<tr>{''.join(header_cells)}</tr>"]
+        row_maps = [dict(rows) for _title, rows in columns]
+        for label in labels:
+            cells = [
+                "<td style='padding: 6px 10px; border: 1px solid #dbe4f0; "
+                "background: #f8fafc; font-weight: 600; color: #334155;'>"
+                f"{escape(label)}</td>"
+            ]
+            for row_map in row_maps:
+                cells.append(
+                    "<td style='padding: 6px 10px; border: 1px solid #dbe4f0; color: #0f172a;'>"
+                    f"{escape(row_map.get(label, '--'))}</td>"
+                )
+            table_rows.append(f"<tr>{''.join(cells)}</tr>")
+
+        return (
+            "<table cellspacing='0' cellpadding='0' "
+            "style='width: 100%; border-collapse: collapse; background: #ffffff;'>"
+            f"{''.join(table_rows)}"
+            "</table>"
+        )
+
+    def _summary_metric_rows(self, metrics: object, *, fallback_episode: object = None) -> list[tuple[str, str]]:
+        payload = metrics if isinstance(metrics, dict) else {}
+        episode = payload.get("episode")
+        if episode is None:
+            episode = fallback_episode
+        return [
+            ("Episode", self._format_optional_value(episode)),
+            ("Success rate", self._format_percent_metric(payload.get("success_rate"))),
+            (
+                "Mean reward",
+                self._format_decimal_metric(payload.get("mean_reward", payload.get("episode_reward_mean"))),
+            ),
+            ("Episode length", self._format_decimal_metric(payload.get("episode_length_mean"))),
+        ]
+
+    def _format_optional_value(self, value: object, *, empty: str = "unknown") -> str:
+        if value is None or value == "":
+            return empty
+        return str(value)
+
+    def _format_decimal_metric(self, value: object) -> str:
         if value is None:
             return "--"
         try:
-            return f"{float(value):.6f}"
+            return f"{float(value):.3f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _format_percent_metric(self, value: object) -> str:
+        if value is None:
+            return "--"
+        try:
+            return f"{float(value) * 100.0:.1f}%"
         except (TypeError, ValueError):
             return str(value)

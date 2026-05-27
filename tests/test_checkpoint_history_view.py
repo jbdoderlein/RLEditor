@@ -53,10 +53,13 @@ def test_checkpoint_history_view_renders_checkpoint_details_as_html_tables() -> 
     html = view.checkpoint_details.toHtml()
 
     assert "Checkpoint produced by this run" in html
-    assert "Checkpoint ID" in html
-    assert "Recorded training metrics" in html
+    assert "Checkpoint ID" not in html
+    assert "Training results" in html
+    assert "Episode" in html
     assert "Success rate" in html
     assert "20.0%" in html
+    assert "Mean reward" in html
+    assert "Episode length" in html
 
 
 def test_checkpoint_history_view_prefers_evaluation_metrics_and_lists_eval_episodes() -> None:
@@ -113,11 +116,189 @@ def test_checkpoint_history_view_prefers_evaluation_metrics_and_lists_eval_episo
 
     view.set_history(snapshot)
 
-    assert "Evaluation metrics" in view.checkpoint_details.toHtml()
+    assert "Evaluation results" in view.checkpoint_details.toHtml()
     assert "100.0%" in view.checkpoint_details.toHtml()
     assert "Evaluation Task" in view.segment_details.toPlainText()
     assert "Seed: 42" in view.segment_details.toPlainText()
     assert view.episode_list.count() == 2
+
+
+def test_checkpoint_history_view_edge_selection_shows_training_metrics_not_node_evaluation() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    task_snapshot = TaskSnapshot(
+        environment_id="tiny_env",
+        task_name="Training Task",
+        task_id="task_train",
+    )
+    run = TrainingRun(
+        run_id="run_train",
+        task_id="task_train",
+        status=TrainingStatus.FINISHED,
+        started_at="2026-05-17 09:00:00",
+        ended_at="2026-05-17 09:10:00",
+        metadata={
+            "algorithm": "q_learning",
+            "seed": 123,
+            "run_config": {
+                "algorithm": "q_learning",
+                "seed": 123,
+                "max_steps": 100,
+                "max_episodes": 12,
+                "max_steps_per_episode": 8,
+            },
+        },
+    )
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_010",
+        label="Checkpoint 010",
+        created_at="2026-05-17 09:10:00",
+        reason="run_finished",
+        run_id="run_train",
+        task_id="task_train",
+        task_name="Training Task",
+        step=100,
+        episode=4,
+        task_snapshot=task_snapshot,
+        metadata={
+            "algorithm": "q_learning",
+            "evaluation": {
+                "run_id": "eval_checkpoint_010",
+                "task_name": "Evaluation Task",
+                "environment_id": "tiny_env",
+                "episode_count": 2,
+            },
+            "evaluation_metrics": {
+                "mean_reward": 1.0,
+                "success_rate": 1.0,
+            },
+            "training_metrics": {
+                "step": 100,
+                "episode": 4,
+                "mean_reward": 0.25,
+                "success_rate": 0.35,
+                "episode_reward_mean": 0.25,
+                "episode_length_mean": 6.5,
+                "exploration_rate": 0.1,
+            },
+        },
+    )
+    snapshot = TrainingHistorySnapshot(
+        runs=[run],
+        checkpoints=[checkpoint],
+        episodes_by_run={
+            "run_train": [
+                EpisodeTrace(episode_id=1, run_id="run_train", total_reward=0.0, success=False),
+                EpisodeTrace(episode_id=4, run_id="run_train", total_reward=1.0, success=True),
+            ],
+            "eval_checkpoint_010": [
+                EpisodeTrace(episode_id=1, run_id="eval_checkpoint_010", total_reward=1.0, success=True),
+            ],
+        },
+        run_task_snapshots={"run_train": task_snapshot},
+    )
+
+    view.set_history(snapshot)
+    assert "Evaluation results" in view.checkpoint_details.toHtml()
+    assert "100.0%" in view.checkpoint_details.toHtml()
+
+    edge = view.graph_widget.edge_for_id("edge:checkpoint_010")
+    assert edge is not None
+    view.graph_widget.select_edge(edge.edge_id)
+    view._show_edge_details(edge)
+
+    html = view.checkpoint_details.toHtml()
+    assert view.details_group.title() == "Training Details"
+    assert "Selected training run" in html
+    assert "Training setup" in html
+    assert "Training results" in html
+    assert "Task name" in html
+    assert "Training Task" in html
+    assert "Recorded episodes" in html
+    assert "Max steps / episode" in html
+    assert "Success rate" in html
+    assert "35.0%" in html
+    assert "100.0%" not in html
+    assert "Episodes" in html
+    assert "12" in html
+    assert ">Max steps</td>" not in html
+    assert "Run ID" not in html
+    assert view.segment_group.title() == "Training Run"
+    assert view.episode_list.count() == 2
+
+
+def test_checkpoint_history_view_multiple_node_selection_compares_metric_columns() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    checkpoint_a = Checkpoint(
+        checkpoint_id="checkpoint_a",
+        label="Checkpoint A",
+        created_at="2026-05-17 09:00:00",
+        reason="run_finished",
+        run_id="run_a",
+        task_name="Task A",
+        step=50,
+        episode=5,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Task A"),
+        metadata={
+            "evaluation": {"run_id": "eval_a", "episode_count": 3},
+            "evaluation_metrics": {
+                "episode": 3,
+                "success_rate": 1.0,
+                "mean_reward": 0.9,
+                "episode_length_mean": 4.0,
+            },
+        },
+    )
+    checkpoint_b = Checkpoint(
+        checkpoint_id="checkpoint_b",
+        label="Checkpoint B",
+        created_at="2026-05-17 09:05:00",
+        reason="run_finished",
+        run_id="run_b",
+        task_name="Task B",
+        step=80,
+        episode=8,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Task B"),
+        metadata={
+            "training_metrics": {
+                "episode": 8,
+                "success_rate": 0.25,
+                "mean_reward": -0.1,
+                "episode_length_mean": 7.5,
+            },
+        },
+    )
+
+    view.set_history(
+        TrainingHistorySnapshot(
+            runs=[],
+            checkpoints=[checkpoint_a, checkpoint_b],
+            episodes_by_run={},
+            run_task_snapshots={},
+        )
+    )
+    view.graph_widget.select_node("checkpoint_a")
+    view.graph_widget.select_node("checkpoint_b", additive=True)
+    node_b = view.graph_widget.node_for_id("checkpoint_b")
+    assert node_b is not None
+
+    view._show_node_details(node_b)
+
+    html = view.checkpoint_details.toHtml()
+    assert view.graph_widget.selected_node_ids == ("checkpoint_a", "checkpoint_b")
+    assert view.details_group.title() == "Node Details"
+    assert "Selected checkpoints" in html
+    assert "Metric" in html
+    assert "Checkpoint A" in html
+    assert "Checkpoint B" in html
+    assert "Success rate" in html
+    assert "100.0%" in html
+    assert "25.0%" in html
+    assert "Mean reward" in html
+    assert "-0.100" in html
+    assert "Episode length" in html
+    assert "Checkpoint ID" not in html
 
 
 def test_checkpoint_history_view_emits_manual_evaluation_for_selected_checkpoint() -> None:

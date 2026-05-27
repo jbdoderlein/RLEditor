@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
+from gymnasium.spaces import Discrete
 from PySide6.QtWidgets import QApplication, QLabel
 
 from rleditor.application.persistence import ProjectStore
@@ -31,6 +34,41 @@ class _DummyBackend:
         return object()
 
 
+class _TinyEnv:
+    def __init__(self) -> None:
+        self.action_space = Discrete(2)
+        self.observation_space = Discrete(3)
+        self._state = 0
+
+    def reset(self, *, seed: int | None = None):
+        _ = seed
+        self._state = 0
+        return self._state, {}
+
+    def step(self, action: int):
+        _ = action
+        self._state = min(2, self._state + 1)
+        terminated = self._state >= 2
+        reward = 1.0 if terminated else 0.0
+        return self._state, reward, terminated, False, {"is_success": terminated}
+
+    def close(self) -> None:
+        return
+
+
+class _TinyBackend:
+    def default_task(self) -> TaskDefinition:
+        return TaskDefinition(
+            environment_id="tiny_env",
+            name="Tiny Main Task",
+            task_id="task_tiny",
+        )
+
+    def create_env(self, task: TaskDefinition):
+        _ = task
+        return _TinyEnv()
+
+
 class _EmittingGuiExtension:
     def create_task_editor_widget(self, task, on_task_changed):
         task.metadata["editor_initialized"] = True
@@ -42,11 +80,30 @@ class _EmittingGuiExtension:
         return None
 
 
+class _FakeInteractionLogger:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict[str, object]]] = []
+
+    def log(self, event: str, **payload: object) -> None:
+        self.records.append((event, payload))
+
+
 def _app() -> QApplication:
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
     return app
+
+
+def _wait_for(predicate, *, timeout_seconds: float = 1.0) -> None:
+    app = _app()
+    deadline = time.perf_counter() + timeout_seconds
+    while time.perf_counter() < deadline:
+        app.processEvents()
+        if predicate():
+            return
+        time.sleep(0.001)
+    assert predicate()
 
 
 def test_add_new_task_clones_first_workspace_task_state() -> None:
@@ -281,11 +338,13 @@ def test_curriculum_import_adds_tasks_and_starts_first_step() -> None:
         )
     )
     training_service = TrainingService(registry)
+    interaction_logger = _FakeInteractionLogger()
     window = MainWindow(
         registry=registry,
         task_service=TaskService(registry),
         training_service=training_service,
         initial_plugin_id="dummy",
+        interaction_logger=interaction_logger,  # type: ignore[arg-type]
     )
     payload = {
         "curriculum": {
@@ -361,6 +420,75 @@ def test_curriculum_import_adds_tasks_and_starts_first_step() -> None:
     assert queued_task is window._task_workspace[-1]
     assert queued_config.evaluation_policy["episode_count"] == 5
     assert queued_config.evaluation_policy["seed"] == 7
+
+
+@pytest.mark.parametrize("breakpoint_actions", [["checkpoint"], ["pause", "checkpoint"]])
+def test_curriculum_import_stops_after_checkpoint_breakpoint_so_new_training_can_start(
+    breakpoint_actions: list[str],
+) -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="tiny_env",
+            display_name="Tiny",
+            description="Tiny curriculum test plugin",
+            backend=_TinyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="tiny_env",
+    )
+    payload = {
+        "curriculum": {
+            "size": 1,
+            "seed": 42,
+            "steps": [
+                {
+                    "env_id": 0,
+                    "steps": 100,
+                    "algorithm": "q_learning",
+                    "breakpoints": [
+                        {
+                            "kind": "max_step",
+                            "value": 1,
+                            "actions": breakpoint_actions,
+                        }
+                    ],
+                }
+            ],
+        },
+        "environments": [
+            {
+                "task_id": 0,
+                "environment_id": "tiny_env",
+                "task_name": "Imported Tiny",
+            }
+        ],
+    }
+
+    window._on_curriculum_import_requested(payload)
+
+    _wait_for(lambda: training_service.status == TrainingStatus.STOPPED)
+
+    assert window._imported_curriculum_active is False
+    assert window._imported_curriculum_waiting_for_step is False
+    assert not window._imported_curriculum_queue
+    assert len(training_service.history_snapshot().checkpoints) == 1
+
+    training_service.start(
+        TaskDefinition(environment_id="tiny_env", name="Manual Tiny", task_id="task_manual"),
+        RunConfig(max_steps=2, max_episodes=1, seed=99),
+        start_from_scratch=True,
+    )
+
+    assert training_service.status == TrainingStatus.RUNNING
+    training_service.stop()
 
 
 def test_status_bar_busy_indicator_tracks_active_work() -> None:
@@ -455,11 +583,13 @@ def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() 
         )
     )
     training_service = TrainingService(registry)
+    interaction_logger = _FakeInteractionLogger()
     window = MainWindow(
         registry=registry,
         task_service=TaskService(registry),
         training_service=training_service,
         initial_plugin_id="dummy",
+        interaction_logger=interaction_logger,  # type: ignore[arg-type]
     )
 
     second_task = TaskDefinition(
@@ -503,3 +633,17 @@ def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() 
     assert config.evaluation_policy["episode_count"] == 4
     assert config.evaluation_policy["max_steps_per_episode"] == 77
     assert config.evaluation_policy["seed"] == 314
+    training_started = [
+        payload
+        for event, payload in interaction_logger.records
+        if event == "training_started"
+    ]
+    assert training_started
+    assert training_started[-1]["mode"] == "parallel"
+    assert training_started[-1]["algorithm"] == "q_learning"
+    assert training_started[-1]["max_steps"] == 123
+    assert training_started[-1]["seed"] is None
+    assert training_started[-1]["tasks"] == [
+        {"task_id": "task_second", "name": "Second Task", "environment_id": "dummy_env"},
+        {"task_id": "task_third", "name": "Third Task", "environment_id": "dummy_env"},
+    ]

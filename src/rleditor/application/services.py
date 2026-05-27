@@ -559,6 +559,17 @@ class TrainingService(QObject):
         if run is None:
             return False
 
+        run_checkpoints = [
+            checkpoint for checkpoint in self._checkpoints if checkpoint.run_id == run_id
+        ]
+        if reason in {"run_finished", "run_stopped"} and run_checkpoints:
+            latest_checkpoint = run_checkpoints[-1]
+            if (
+                latest_checkpoint.step == context.latest_metrics.step
+                and latest_checkpoint.episode == context.latest_metrics.episode
+            ):
+                return False
+
         self._checkpoint_counter += 1
         checkpoint_id = f"checkpoint_{self._checkpoint_counter:03d}"
         created_at = self._timestamp_now()

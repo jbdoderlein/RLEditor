@@ -354,13 +354,10 @@ class TrainingRunner(QObject):
         self._metrics.step += 1
         self._metrics.fps = 1.0 / elapsed
 
-        max_steps = self._config.max_steps
-        progress = 0.0 if max_steps is None else min(1.0, self._metrics.step / max(max_steps, 1))
-        exploration_floor = 0.02
-        self._metrics.exploration_rate = max(
-            exploration_floor,
-            self._config.epsilon * (1.0 - progress),
-        )
+        if self._config.algorithm == "q_learning":
+            self._metrics.exploration_rate = self._q_learning_exploration_rate()
+        else:
+            self._metrics.exploration_rate = 0.0
 
         action = self._select_action(previous_observation, env)
 
@@ -583,6 +580,23 @@ class TrainingRunner(QObject):
             )
             raise RuntimeError(msg)
 
+        if (
+            self._config.algorithm == "q_learning"
+            and self._action_space_size(getattr(candidate_env, "action_space", None)) is None
+        ):
+            try:
+                close = getattr(candidate_env, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass
+            self._env = None
+            msg = (
+                f"Cannot start Q-learning for task '{self._task.name}': "
+                "Q-learning requires a discrete action_space.n."
+            )
+            raise RuntimeError(msg)
+
         if is_stable_baselines3_algorithm(self._config.algorithm):
             self._connect_stable_baselines3_environment_or_raise(candidate_env)
             return
@@ -719,6 +733,37 @@ class TrainingRunner(QObject):
                 return 0
 
         return 0
+
+    def _q_learning_exploration_rate(self) -> float:
+        epsilon = max(0.0, min(1.0, float(self._config.epsilon)))
+        epsilon_min = self._q_learning_hyperparameter_float(
+            "epsilon_min",
+            0.02 if epsilon > 0.0 else 0.0,
+        )
+        epsilon_min = max(0.0, min(epsilon, epsilon_min))
+        completed_steps = max(0, self._metrics.step - 1)
+
+        epsilon_decay = self._q_learning_hyperparameter_float("epsilon_decay", None)
+        if epsilon_decay is not None:
+            epsilon_decay = max(0.0, min(1.0, epsilon_decay))
+            exploration_rate = epsilon * (epsilon_decay ** completed_steps)
+            return max(epsilon_min, exploration_rate)
+
+        max_steps = self._config.max_steps
+        if max_steps is None or max_steps <= 1:
+            return max(epsilon_min, epsilon)
+
+        progress = min(1.0, completed_steps / max(max_steps - 1, 1))
+        return max(epsilon_min, epsilon * (1.0 - progress))
+
+    def _q_learning_hyperparameter_float(self, key: str, default: float | None) -> float | None:
+        raw_value = self._config.hyperparameters.get(key)
+        if raw_value is None:
+            return default
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            return default
 
     def _update_q_learning(
         self,
