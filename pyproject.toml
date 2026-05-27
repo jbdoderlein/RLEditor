@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 rleditor = "rleditor.main:main"
+timeline = "rleditor.tools.interaction_timeline:main"
 
 [build-system]
 requires = ["setuptools>=82.0.1", "wheel"]
