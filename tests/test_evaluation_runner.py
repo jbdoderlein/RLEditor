@@ -192,6 +192,7 @@ def test_evaluate_policy_supports_old_gym_reset_and_step_api() -> None:
     assert trace.steps[0].terminated is True
     assert trace.steps[0].truncated is False
     assert result.metrics.reward_step == 1.0
+    assert result.metrics.cumulative_reward == 1.0
 
 
 def test_evaluate_policy_forces_failure_at_evaluation_step_limit() -> None:

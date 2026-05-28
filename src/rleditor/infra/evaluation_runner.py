@@ -265,6 +265,7 @@ def _metrics_from_episodes(episodes: list[EpisodeTrace], *, elapsed: float) -> T
         step=step_count,
         episode=len(episodes),
         reward_step=last_reward,
+        cumulative_reward=sum(rewards),
         mean_reward=mean_reward,
         episode_reward_mean=mean_reward,
         success_rate=success_rate,

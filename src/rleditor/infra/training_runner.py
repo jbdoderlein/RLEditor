@@ -310,6 +310,7 @@ class TrainingRunner(QObject):
 
         for summary in trace_env.drain_episode_summaries():
             self._metrics.episode += 1
+            self._metrics.cumulative_reward += summary.total_reward
             self._episode_rewards.append(summary.total_reward)
             self._episode_lengths.append(summary.length)
             self._episode_successes.append(1 if summary.success else 0)
@@ -425,6 +426,7 @@ class TrainingRunner(QObject):
         self._observation = normalized_observation
 
         self._metrics.reward_step = reward_value
+        self._metrics.cumulative_reward += reward_value
 
         if self._config.algorithm == "q_learning":
             self._update_q_learning(
@@ -716,14 +718,16 @@ class TrainingRunner(QObject):
                 return self._random.randrange(action_count)
 
             state_key = self._state_key(observation)
-            best_action = 0
             best_q = float("-inf")
+            best_actions: list[int] = []
             for action in range(action_count):
                 q_value = self._q_values.get((state_key, action), 0.0)
                 if q_value > best_q:
                     best_q = q_value
-                    best_action = action
-            return best_action
+                    best_actions = [action]
+                elif q_value == best_q:
+                    best_actions.append(action)
+            return self._random.choice(best_actions) if best_actions else 0
 
         if action_space is not None and hasattr(action_space, "sample"):
             sampled = action_space.sample()

@@ -58,7 +58,7 @@ METRIC_SPECS: list[tuple[str, str, str]] = [
     ("episode_reward_mean", "Episode Return (Mean)", "#0a9396"),
     ("success_rate", "Success Rate", "#386641"),
     ("episode_length_mean", "Episode Length (Mean)", "#bc6c25"),
-    ("exploration_rate", "Exploration Rate", "#7c3aed"),
+    ("cumulative_reward", "Cumulative Reward", "#7c3aed"),
     ("value_loss", "TD Error", "#b45309"),
     ("fps", "FPS", "#577590"),
 ]
@@ -187,7 +187,7 @@ class RunMetricPanel(QGroupBox):
         self._update_metric_card("episode_reward_mean", metrics.episode_reward_mean)
         self._update_metric_card("success_rate", metrics.success_rate)
         self._update_metric_card("episode_length_mean", metrics.episode_length_mean)
-        self._update_metric_card("exploration_rate", metrics.exploration_rate)
+        self._update_metric_card("cumulative_reward", metrics.cumulative_reward)
         self._update_metric_card("value_loss", metrics.value_loss)
         self._update_metric_card("fps", metrics.fps)
 
@@ -217,7 +217,7 @@ class TrainingMonitorView(QWidget):
             "episode_reward_mean": lambda value: _format_scalar(value),
             "success_rate": lambda value: _format_percent(value),
             "episode_length_mean": lambda value: _format_scalar(value, digits=2),
-            "exploration_rate": lambda value: _format_percent(value),
+            "cumulative_reward": lambda value: _format_scalar(value),
             "value_loss": lambda value: _format_scalar(value),
             "fps": lambda value: "--" if value is None else f"{value:.1f}",
         }
@@ -250,7 +250,7 @@ class TrainingMonitorView(QWidget):
         self.max_steps_per_episode_spin = QSpinBox(config_group)
         self.max_steps_per_episode_spin.setRange(0, 10_000_000)
         self.max_steps_per_episode_spin.setSpecialValueText("No limit")
-        self.max_steps_per_episode_spin.setValue(1000)
+        self.max_steps_per_episode_spin.setValue(100)
 
         self.learning_rate_spin = QDoubleSpinBox(config_group)
         self.learning_rate_spin.setRange(0.0, 1.0)
@@ -303,7 +303,7 @@ class TrainingMonitorView(QWidget):
 
         self.status_label = QLabel("Status: idle")
         self.metrics_label = QLabel(
-            "steps=0 | episodes=0 | return_mean=0.000 | success=0.0% | epsilon=0.0% | td_error=--"
+            "steps=0 | episodes=0 | return_mean=0.000 | success=0.0% | cumulative_reward=0.000 | td_error=--"
         )
         self.breakpoint_label = QLabel("Breakpoint: -")
 
@@ -374,7 +374,7 @@ class TrainingMonitorView(QWidget):
             f"{metrics.step} | episodes={metrics.episode} | "
             f"return_mean={metrics.episode_reward_mean:.3f} | "
             f"success={_format_percent(metrics.success_rate)} | "
-            f"epsilon={_format_percent(metrics.exploration_rate)} | "
+            f"cumulative_reward={metrics.cumulative_reward:.3f} | "
             f"td_error={_format_scalar(metrics.value_loss)}"
         )
 
@@ -473,7 +473,7 @@ class TrainingMonitorView(QWidget):
 
     def _reset_metric_cards(self) -> None:
         self.metrics_label.setText(
-            "steps=0 | episodes=0 | return_mean=0.000 | success=0.0% | epsilon=0.0% | td_error=--"
+            "steps=0 | episodes=0 | return_mean=0.000 | success=0.0% | cumulative_reward=0.000 | td_error=--"
         )
         for panel in self._run_metric_panels.values():
             panel.setParent(None)

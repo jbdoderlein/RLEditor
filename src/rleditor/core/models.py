@@ -345,6 +345,7 @@ class TrainingMetrics:
     step: int = 0
     episode: int = 0
     reward_step: float = 0.0
+    cumulative_reward: float = 0.0
     mean_reward: float = 0.0
     episode_reward_mean: float = 0.0
     success_rate: float = 0.0

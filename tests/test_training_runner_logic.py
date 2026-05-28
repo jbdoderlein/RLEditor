@@ -133,6 +133,7 @@ def test_training_runner_non_q_algorithm_sample_fallback_uses_zero_action() -> N
 
     assert runner.status == TrainingStatus.FINISHED
     assert env.actions == [0]
+    assert runner._metrics.cumulative_reward == pytest.approx(1.0)
     assert runner.export_learner_state() == {}
 
 
