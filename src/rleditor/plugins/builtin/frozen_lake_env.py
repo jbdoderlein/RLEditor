@@ -40,7 +40,7 @@ DEFAULT_SUCCESS_RATE = 1.0 / 3.0
 def _default_reward_config() -> dict[str, float]:
     return {
         "tile:F": 0.0,
-        "tile:H": -1.0,
+        "tile:H": 0.0,
         "tile:S": 0.0,
         "tile:G": 1.0,
     }

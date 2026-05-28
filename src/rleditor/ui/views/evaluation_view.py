@@ -33,7 +33,7 @@ class EvaluationView(QWidget):
         self.max_steps_per_episode_spin = QSpinBox(self)
         self.max_steps_per_episode_spin.setRange(0, 10_000_000)
         self.max_steps_per_episode_spin.setSpecialValueText("No limit")
-        self.max_steps_per_episode_spin.setValue(1000)
+        self.max_steps_per_episode_spin.setValue(100)
         self.seed_spin = QSpinBox(self)
         self.seed_spin.setRange(-1, 2_147_483_647)
         self.seed_spin.setSpecialValueText("Use training seed")

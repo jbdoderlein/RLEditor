@@ -88,6 +88,18 @@ class _ContinuousActionEnv:
         self.closed = True
 
 
+class _TieBreakingRandom:
+    def __init__(self) -> None:
+        self.choices: list[int] = []
+
+    def random(self) -> float:
+        return 1.0
+
+    def choice(self, values: list[int]) -> int:
+        self.choices = list(values)
+        return self.choices[-1]
+
+
 def _task() -> TaskDefinition:
     return TaskDefinition(environment_id="test_env", name="Q Test Task", task_id="task_q")
 
@@ -119,6 +131,8 @@ def test_q_learning_runner_applies_bellman_update_for_bootstrap_and_terminal_ste
     )
 
     runner.start(_task(), config, run_id="run_q_update", env_factory=lambda _task: env)
+    runner._q_values[("0", 1)] = -1.0
+    runner._q_values[("1", 1)] = -1.0
     for _ in range(4):
         runner._on_tick()
 
@@ -128,7 +142,27 @@ def test_q_learning_runner_applies_bellman_update_for_bootstrap_and_terminal_ste
     assert env.actions == [0, 0, 0, 0]
     assert q_values[("1", 0)] == pytest.approx(0.75)
     assert q_values[("0", 0)] == pytest.approx(0.225)
-    assert ("0", 1) not in q_values
+    assert q_values[("0", 1)] == pytest.approx(-1.0)
+
+
+def test_q_learning_exploitation_breaks_equal_q_ties_randomly() -> None:
+    runner = TrainingRunner()
+    env = _NeverDoneDiscreteEnv()
+    config = RunConfig(
+        algorithm="q_learning",
+        epsilon=0.0,
+        hyperparameters={"epsilon": 0.0, "epsilon_min": 0.0},
+    )
+
+    runner.start(_task(), config, run_id="run_q_tie_break", env_factory=lambda _task: env)
+    random_source = _TieBreakingRandom()
+    runner._random = random_source  # type: ignore[assignment]
+
+    action = runner._select_action(0, env)
+
+    assert random_source.choices == [0, 1]
+    assert action == 1
+    runner.stop()
 
 
 def test_q_learning_runner_restores_checkpoint_and_exploits_best_known_action() -> None:

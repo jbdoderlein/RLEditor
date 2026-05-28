@@ -64,6 +64,15 @@ def test_training_monitor_can_build_unlimited_episode_config() -> None:
     assert config.max_episodes is None
 
 
+def test_training_monitor_defaults_to_100_steps_per_episode() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    config = view.build_config()
+
+    assert config.max_steps_per_episode == 100
+
+
 def test_training_monitor_applies_run_config_to_controls() -> None:
     _app()
     view = TrainingMonitorView()
@@ -137,6 +146,7 @@ def test_training_monitor_surfaces_classic_q_learning_metrics() -> None:
         TrainingMetrics(
             step=128,
             episode=9,
+            cumulative_reward=12.75,
             episode_reward_mean=0.625,
             success_rate=0.5,
             episode_length_mean=11.5,
@@ -150,13 +160,14 @@ def test_training_monitor_surfaces_classic_q_learning_metrics() -> None:
     assert "episodes=9" in view.metrics_label.text()
     assert "return_mean=0.625" in view.metrics_label.text()
     assert "success=50.0%" in view.metrics_label.text()
-    assert "epsilon=8.0%" in view.metrics_label.text()
+    assert "cumulative_reward=12.750" in view.metrics_label.text()
+    assert "epsilon=" not in view.metrics_label.text()
     assert "td_error=0.143" in view.metrics_label.text()
     assert set(view._metric_cards) == {
         "episode_reward_mean",
         "success_rate",
         "episode_length_mean",
-        "exploration_rate",
+        "cumulative_reward",
         "value_loss",
         "fps",
     }

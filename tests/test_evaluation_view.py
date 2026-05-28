@@ -42,3 +42,13 @@ def test_evaluation_view_builds_policy_from_selected_task() -> None:
     assert policy["trace_sample_rate"] == 1.0
     assert policy["task"]["task_id"] == "task_eval"
     assert policy["task"]["config"] == {"difficulty": 3}
+
+
+def test_evaluation_view_defaults_to_100_steps_per_episode() -> None:
+    _app()
+    view = EvaluationView()
+    task = TaskDefinition(environment_id="dummy_env", name="Eval", task_id="task_eval")
+
+    view.set_tasks([task])
+
+    assert view.build_evaluation_policy()["max_steps_per_episode"] == 100

@@ -27,6 +27,7 @@ from rleditor.plugins.builtin.frozen_lake_env import (
     TILE_HOLE,
     TILE_START,
     _coerce_reward_config,
+    _default_reward_config,
     _generate_random_map_desc,
     _map_from_task_config,
     _normalize_map_desc,
@@ -224,6 +225,11 @@ def test_frozen_lake_config_helpers_normalize_sizes_maps_and_rewards() -> None:
     assert rewards["tile:F"] == pytest.approx(0.5)
     assert rewards["tile:H"] == pytest.approx(-2.0)
     assert rewards["tile:G"] == pytest.approx(1.0)
+
+
+def test_frozen_lake_default_hole_reward_matches_gym_default() -> None:
+    assert _default_reward_config()["tile:H"] == pytest.approx(0.0)
+    assert FrozenLakeBackend().default_task().reward_config["tile:H"] == pytest.approx(0.0)
 
 
 def test_frozen_lake_success_rate_and_state_helpers_reject_invalid_values() -> None:

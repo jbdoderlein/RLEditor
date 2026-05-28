@@ -10,8 +10,11 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -28,6 +31,14 @@ from PySide6.QtWidgets import (
 
 from rleditor.application.services import TrainingHistorySnapshot
 from rleditor.core.models import Checkpoint, EpisodeTrace, RunConfig, TaskSnapshot, TrainingRun
+
+
+FROZEN_LAKE_ACTION_SYMBOLS = {
+    0: "←",
+    1: "↓",
+    2: "→",
+    3: "↑",
+}
 
 
 @dataclass(slots=True)
@@ -55,6 +66,197 @@ class _LineageEdge:
     episodes: list[EpisodeTrace]
     source_point: QPointF
     target_point: QPointF
+
+
+class _QTableDialog(QDialog):
+    def __init__(self, checkpoint: Checkpoint, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Q table - {checkpoint.label or checkpoint.checkpoint_id}")
+        self.resize(900, 620)
+
+        self._checkpoint = checkpoint
+        self._q_values = _q_values_from_checkpoint(checkpoint)
+        self._map_rows = _frozen_lake_map_rows(checkpoint)
+        self._action_count = _q_table_action_count(self._q_values, self._map_rows)
+        self.policy_cells: dict[tuple[int, int], QLabel] = {}
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel(self._summary_text(), self))
+
+        if self._map_rows is not None:
+            root.addWidget(QLabel("FrozenLake policy map: best action and max Q-value per state", self))
+            root.addWidget(self._build_policy_map(), 1)
+        else:
+            root.addWidget(
+                QLabel("Policy map display is available for FrozenLake Q-learning checkpoints.", self),
+                1,
+            )
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def _summary_text(self) -> str:
+        return (
+            f"Checkpoint: {self._checkpoint.checkpoint_id} | "
+            f"stored Q values: {len(self._q_values)}"
+        )
+
+    def _build_policy_map(self) -> QWidget:
+        assert self._map_rows is not None
+
+        host = QWidget(self)
+        grid = QGridLayout(host)
+        grid.setHorizontalSpacing(4)
+        grid.setVerticalSpacing(4)
+
+        max_values = [
+            self._max_q_for_state(str(index))
+            for index in range(len(self._map_rows) * len(self._map_rows[0]))
+        ]
+        finite_values = [value for value in max_values if value is not None]
+        min_value = min(finite_values) if finite_values else 0.0
+        max_value = max(finite_values) if finite_values else 1.0
+
+        for row, map_row in enumerate(self._map_rows):
+            for col, tile in enumerate(map_row):
+                state_index = row * len(map_row) + col
+                state_key = str(state_index)
+                value = self._max_q_for_state(state_key)
+                action = self._best_action_for_state(state_key)
+                action_symbol = FROZEN_LAKE_ACTION_SYMBOLS.get(action, "-") if action is not None else "-"
+                value_text = "--" if value is None else f"{value:.3f}"
+                label = QLabel(f"{tile}\n{action_symbol}\n{value_text}", host)
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                label.setMinimumSize(62, 52)
+                label.setStyleSheet(
+                    "QLabel { "
+                    f"background: {_q_value_color(value, min_value=min_value, max_value=max_value)}; "
+                    "border: 1px solid #cbd5e1; border-radius: 4px; "
+                    "font-weight: 600; color: #0f172a; "
+                    "}"
+                )
+                self.policy_cells[(row, col)] = label
+                grid.addWidget(label, row, col)
+
+        return host
+
+    def _max_q_for_state(self, state_key: str) -> float | None:
+        if self._action_count <= 0:
+            return None
+        values = [
+            self._q_values.get((state_key, action), 0.0)
+            for action in range(self._action_count)
+        ]
+        if not values:
+            return None
+        if all((state_key, action) not in self._q_values for action in range(self._action_count)):
+            return None
+        return max(values)
+
+    def _best_action_for_state(self, state_key: str) -> int | None:
+        if self._action_count <= 0:
+            return None
+        values = [
+            (action, self._q_values.get((state_key, action), 0.0))
+            for action in range(self._action_count)
+        ]
+        if not values:
+            return None
+        if all((state_key, action) not in self._q_values for action in range(self._action_count)):
+            return None
+        best_value = max(value for _action, value in values)
+        best_actions = [action for action, value in values if value == best_value]
+        return min(best_actions)
+
+
+def _q_values_from_checkpoint(checkpoint: Checkpoint) -> dict[tuple[str, int], float]:
+    learner_state = checkpoint.metadata.get("learner_state")
+    if not isinstance(learner_state, dict):
+        return {}
+
+    q_values_payload = learner_state.get("q_values", [])
+    if not isinstance(q_values_payload, list):
+        return {}
+
+    q_values: dict[tuple[str, int], float] = {}
+    for entry in q_values_payload:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            state_key = str(entry.get("state_key", ""))
+            action = int(entry.get("action", 0))
+            value = float(entry.get("value", 0.0))
+        except (TypeError, ValueError):
+            continue
+        q_values[(state_key, action)] = value
+    return q_values
+
+
+def _checkpoint_has_q_learning_state(checkpoint: Checkpoint | None) -> bool:
+    if checkpoint is None:
+        return False
+    metadata = checkpoint.metadata
+    if metadata.get("algorithm") == "q_learning":
+        return True
+    learner_state = metadata.get("learner_state")
+    return isinstance(learner_state, dict) and learner_state.get("algorithm") == "q_learning"
+
+
+def _frozen_lake_map_rows(checkpoint: Checkpoint) -> list[str] | None:
+    task_snapshot = checkpoint.task_snapshot
+    if task_snapshot is None or task_snapshot.environment_id != "frozen_lake":
+        return None
+    task_config = task_snapshot.task_config
+    raw_map = task_config.get("map_desc")
+    if isinstance(raw_map, list) and raw_map and all(isinstance(row, str) for row in raw_map):
+        rows = [str(row) for row in raw_map]
+        width = len(rows[0])
+        if width > 0 and all(len(row) == width for row in rows):
+            return rows
+
+    size = _parse_map_size(task_config.get("size"), fallback=4)
+    rows = ["F" * size for _ in range(size)]
+    rows[0] = "S" + rows[0][1:]
+    rows[-1] = rows[-1][:-1] + "G"
+    return rows
+
+
+def _parse_map_size(value: object, *, fallback: int) -> int:
+    if isinstance(value, int):
+        return max(2, value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text.endswith("x"):
+            text = text[:-1]
+        if "x" in text:
+            text = text.split("x", 1)[0]
+        if text.isdigit():
+            return max(2, int(text))
+    return fallback
+
+
+def _q_table_action_count(
+    q_values: dict[tuple[str, int], float],
+    map_rows: list[str] | None,
+) -> int:
+    if map_rows is not None:
+        q_action_count = max((action for _state, action in q_values), default=-1) + 1
+        return max(4, q_action_count)
+    if q_values:
+        return max(action for _state, action in q_values) + 1
+    return 0
+
+
+def _q_value_color(value: float | None, *, min_value: float, max_value: float) -> str:
+    if value is None:
+        return "#f8fafc"
+    span = max(max_value - min_value, 1e-9)
+    ratio = max(0.0, min(1.0, (value - min_value) / span))
+    red = int(239 - 100 * ratio)
+    green = int(246 - 80 * ratio)
+    blue = 255
+    return QColor(red, green, blue).name()
 
 
 class CheckpointGraphWidget(QWidget):
@@ -435,6 +637,7 @@ class CheckpointHistoryView(QWidget):
         self._snapshot = TrainingHistorySnapshot([], [], {}, {})
         self._current_segment_episodes: list[EpisodeTrace] = []
         self._selected_start_node_id: str | None = None
+        self._q_table_checkpoint: Checkpoint | None = None
 
         root = QVBoxLayout(self)
 
@@ -484,6 +687,12 @@ class CheckpointHistoryView(QWidget):
             "Evaluate the selected checkpoint using the Evaluation tab settings."
         )
         self.evaluate_checkpoint_button.setEnabled(False)
+        self.show_q_table_button = QPushButton("Show Q Table", right_panel)
+        self.show_q_table_button.setToolTip(
+            "Open the Q-learning table stored in the selected checkpoint."
+        )
+        self.show_q_table_button.setEnabled(False)
+        self.show_q_table_button.setVisible(False)
         self.import_checkpoint_button = QPushButton("Import Checkpoint", right_panel)
         self.import_checkpoint_button.setToolTip(
             "Import one checkpoint JSON into the current history."
@@ -530,6 +739,7 @@ class CheckpointHistoryView(QWidget):
         trace_buttons_layout = QHBoxLayout()
         trace_buttons_layout.addWidget(self.export_curriculum_button)
         trace_buttons_layout.addWidget(self.evaluate_checkpoint_button)
+        trace_buttons_layout.addWidget(self.show_q_table_button)
         trace_buttons_layout.addStretch(1)
 
         actions_layout.addLayout(plan_buttons_layout)
@@ -560,6 +770,7 @@ class CheckpointHistoryView(QWidget):
         self.export_curriculum_plan_button.clicked.connect(self._export_selected_curriculum_plan)
         self.export_checkpoint_button.clicked.connect(self._export_selected_checkpoint)
         self.evaluate_checkpoint_button.clicked.connect(self._emit_evaluate_selected_checkpoint)
+        self.show_q_table_button.clicked.connect(self._show_selected_q_table)
         self.import_checkpoint_button.clicked.connect(self._import_checkpoint_from_file)
         self.import_curriculum_button.clicked.connect(self._import_curriculum_from_file)
 
@@ -642,6 +853,7 @@ class CheckpointHistoryView(QWidget):
         self._current_segment_episodes = []
         self.inspect_episode_button.setEnabled(False)
         self._set_export_buttons_enabled(False)
+        self._set_q_table_checkpoint(None)
 
     def _render_empty_segment_selection(self) -> None:
         self.segment_group.setTitle("Run Episodes")
@@ -654,6 +866,7 @@ class CheckpointHistoryView(QWidget):
     def _show_node_details(self, node: _LineageNode) -> None:
         self.details_group.setTitle("Node Details")
         self._selected_start_node_id = node.node_id
+        self._set_q_table_checkpoint(node.checkpoint)
         selected_nodes = self.graph_widget.selected_nodes()
         if node.node_id not in {selected_node.node_id for selected_node in selected_nodes}:
             selected_nodes = [node]
@@ -680,6 +893,7 @@ class CheckpointHistoryView(QWidget):
             self._set_root_details(node)
             self._render_empty_segment_selection()
             self._set_export_buttons_enabled(False)
+            self._set_q_table_checkpoint(None)
             return
 
         checkpoint = node.checkpoint
@@ -695,6 +909,7 @@ class CheckpointHistoryView(QWidget):
     def _show_edge_details(self, edge: _LineageEdge) -> None:
         self.details_group.setTitle("Training Details")
         self.segment_group.setTitle("Training Run")
+        self._set_q_table_checkpoint(None)
         checkpoint = edge.target_checkpoint
         run = edge.run
         self._set_export_buttons_enabled(True)
@@ -798,6 +1013,20 @@ class CheckpointHistoryView(QWidget):
         self.export_curriculum_plan_button.setEnabled(enabled)
         self.export_checkpoint_button.setEnabled(enabled)
         self.evaluate_checkpoint_button.setEnabled(enabled)
+
+    def _set_q_table_checkpoint(self, checkpoint: Checkpoint | None) -> None:
+        enabled = _checkpoint_has_q_learning_state(checkpoint)
+        self._q_table_checkpoint = checkpoint if enabled else None
+        self.show_q_table_button.setVisible(enabled)
+        self.show_q_table_button.setEnabled(enabled)
+
+    def _show_selected_q_table(self) -> None:
+        if self._q_table_checkpoint is None:
+            return
+        self._build_q_table_dialog(self._q_table_checkpoint).exec()
+
+    def _build_q_table_dialog(self, checkpoint: Checkpoint) -> _QTableDialog:
+        return _QTableDialog(checkpoint, self)
 
     def _export_selected_curriculum(self, *, include_episode_traces: bool) -> None:
         checkpoint = self._selected_export_checkpoint()
@@ -1361,7 +1590,11 @@ class CheckpointHistoryView(QWidget):
                     ("Training setup", setup_rows),
                     (
                         "Training results",
-                        self._summary_metric_rows(metrics, fallback_episode=checkpoint.episode),
+                        self._summary_metric_rows(
+                            metrics,
+                            fallback_episode=checkpoint.episode,
+                            include_cumulative_reward=True,
+                        ),
                     ),
                 ],
             )
@@ -1564,12 +1797,18 @@ class CheckpointHistoryView(QWidget):
             "</table>"
         )
 
-    def _summary_metric_rows(self, metrics: object, *, fallback_episode: object = None) -> list[tuple[str, str]]:
+    def _summary_metric_rows(
+        self,
+        metrics: object,
+        *,
+        fallback_episode: object = None,
+        include_cumulative_reward: bool = False,
+    ) -> list[tuple[str, str]]:
         payload = metrics if isinstance(metrics, dict) else {}
         episode = payload.get("episode")
         if episode is None:
             episode = fallback_episode
-        return [
+        rows = [
             ("Episode", self._format_optional_value(episode)),
             ("Success rate", self._format_percent_metric(payload.get("success_rate"))),
             (
@@ -1578,6 +1817,9 @@ class CheckpointHistoryView(QWidget):
             ),
             ("Episode length", self._format_decimal_metric(payload.get("episode_length_mean"))),
         ]
+        if include_cumulative_reward:
+            rows.append(("Cumulative reward", self._format_decimal_metric(payload.get("cumulative_reward"))))
+        return rows
 
     def _format_optional_value(self, value: object, *, empty: str = "unknown") -> str:
         if value is None or value == "":

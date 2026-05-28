@@ -177,6 +177,7 @@ def test_checkpoint_history_view_edge_selection_shows_training_metrics_not_node_
                 "episode": 4,
                 "mean_reward": 0.25,
                 "success_rate": 0.35,
+                "cumulative_reward": 14.5,
                 "episode_reward_mean": 0.25,
                 "episode_length_mean": 6.5,
                 "exploration_rate": 0.1,
@@ -218,6 +219,8 @@ def test_checkpoint_history_view_edge_selection_shows_training_metrics_not_node_
     assert "Max steps / episode" in html
     assert "Success rate" in html
     assert "35.0%" in html
+    assert "Cumulative reward" in html
+    assert "14.500" in html
     assert "100.0%" not in html
     assert "Episodes" in html
     assert "12" in html
@@ -381,6 +384,49 @@ def test_checkpoint_history_view_emits_manual_evaluation_for_selected_checkpoint
 
     assert captured
     assert captured[0].checkpoint_id == "checkpoint_004"
+
+
+def test_checkpoint_history_view_shows_q_table_for_q_learning_node() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_q",
+        label="Q checkpoint",
+        created_at="2026-04-28 11:30:00",
+        reason="run_finished",
+        run_id="run_q",
+        task_name="Frozen Lake",
+        step=12,
+        episode=2,
+        task_snapshot=TaskSnapshot(
+            environment_id="frozen_lake",
+            task_name="Frozen Lake",
+            task_config={"map_desc": ["SF", "FG"]},
+        ),
+        metadata={
+            "algorithm": "q_learning",
+            "learner_state": {
+                "algorithm": "q_learning",
+                "q_values": [
+                    {"state_key": "0", "action": 1, "value": 0.5},
+                    {"state_key": "0", "action": 2, "value": 0.25},
+                    {"state_key": "1", "action": 2, "value": 1.0},
+                ],
+            },
+        },
+    )
+
+    view.set_history(TrainingHistorySnapshot([], [checkpoint], {}, {}))
+
+    assert view.show_q_table_button.isEnabled()
+    assert not view.show_q_table_button.isHidden()
+    dialog = view._build_q_table_dialog(checkpoint)
+    try:
+        assert not hasattr(dialog, "q_table")
+        assert dialog.policy_cells[(0, 0)].text() == "S\n↓\n0.500"
+        assert dialog.policy_cells[(0, 1)].text() == "F\n→\n1.000"
+    finally:
+        dialog.close()
 
 
 def test_checkpoint_history_view_builds_selected_checkpoint_export_payload() -> None:
