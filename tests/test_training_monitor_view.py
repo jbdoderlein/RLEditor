@@ -33,6 +33,13 @@ def test_training_monitor_breakpoints_default_to_pause_and_checkpoint() -> None:
     assert "actions=pause+checkpoint" in view.breakpoint_list.item(0).text()
 
 
+def test_training_monitor_breakpoint_group_keeps_fixed_height() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    assert view.breakpoint_group.maximumHeight() == view.breakpoint_group.minimumHeight()
+
+
 def test_training_monitor_builds_episode_based_q_learning_config() -> None:
     _app()
     view = TrainingMonitorView()
@@ -171,6 +178,38 @@ def test_training_monitor_surfaces_classic_q_learning_metrics() -> None:
         "value_loss",
         "fps",
     }
+
+
+def test_training_monitor_sparklines_keep_full_run_history() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    for index in range(200):
+        view.set_metrics(
+            TrainingMetrics(
+                step=index,
+                cumulative_reward=float(index),
+                episode_reward_mean=float(index),
+                success_rate=0.0,
+                episode_length_mean=1.0,
+                fps=60.0,
+            )
+        )
+
+    values = view._metric_cards["cumulative_reward"].sparkline._values
+    assert len(values) == 200
+    assert values[0] == pytest.approx(0.0)
+    assert values[-1] == pytest.approx(199.0)
+
+
+def test_training_monitor_adds_axes_to_episode_length_and_cumulative_reward() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    assert view._metric_cards["episode_length_mean"].sparkline._show_axes is True
+    assert view._metric_cards["cumulative_reward"].sparkline._show_axes is True
+    assert view._metric_cards["episode_reward_mean"].sparkline._show_axes is False
+    assert view._metric_cards["success_rate"].sparkline._show_axes is False
 
 
 def test_training_monitor_splits_live_scalars_by_run() -> None:

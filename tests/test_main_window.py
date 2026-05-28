@@ -431,6 +431,85 @@ def test_curriculum_import_adds_tasks_and_starts_first_step() -> None:
     assert queued_config.evaluation_policy["seed"] == 7
 
 
+def test_curriculum_import_reuses_matching_workspace_task() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+        initial_tasks=[
+            TaskDefinition(
+                environment_id="dummy_env",
+                name="Imported Main",
+                task_id="task_existing",
+                config={"difficulty": 1},
+                reward_config={"goal": 1.0},
+                termination_config={"max_steps": 20},
+                metadata={"local_note": "keep"},
+            )
+        ],
+    )
+    existing_task = window._task_workspace[0]
+    payload = {
+        "curriculum": {
+            "size": 2,
+            "steps": [
+                {"env_id": "same", "steps": 100},
+                {"env_id": "changed", "steps": 50},
+            ],
+        },
+        "environments": [
+            {
+                "task_id": "same",
+                "environment_id": "dummy_env",
+                "task_name": "Imported Main",
+                "task_config": {"difficulty": 1},
+                "reward_config": {"goal": 1.0},
+                "termination_config": {"max_steps": 20},
+                "metadata": {"export_note": "ignored for reuse"},
+            },
+            {
+                "task_id": "changed",
+                "environment_id": "dummy_env",
+                "task_name": "Imported Main",
+                "task_config": {"difficulty": 2},
+                "reward_config": {"goal": 1.0},
+                "termination_config": {"max_steps": 20},
+            },
+        ],
+    }
+    captured: dict[str, object] = {}
+
+    def _capture_start(task, config, **kwargs):
+        captured["task"] = task
+        captured["config"] = config
+        captured["kwargs"] = kwargs
+
+    training_service.start = _capture_start  # type: ignore[method-assign]
+
+    window._on_curriculum_import_requested(payload)
+
+    assert len(window._task_workspace) == 2
+    assert window._task_workspace[0] is existing_task
+    assert window._task_workspace[1].name == "Imported Main 2"
+    assert window._task_workspace[1].config == {"difficulty": 2}
+    assert captured["task"] is existing_task
+    queued_task, _queued_config = window._imported_curriculum_queue[0]
+    assert queued_task is window._task_workspace[1]
+
+
 @pytest.mark.parametrize("breakpoint_actions", [["checkpoint"], ["pause", "checkpoint"]])
 def test_curriculum_import_stops_after_checkpoint_breakpoint_so_new_training_can_start(
     breakpoint_actions: list[str],

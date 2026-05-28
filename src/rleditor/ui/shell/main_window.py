@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from copy import deepcopy
+import json
 from typing import Any
 
 from PySide6.QtCore import QTimer, Qt
@@ -610,20 +611,42 @@ class MainWindow(QMainWindow):
         imported_tasks: list[TaskDefinition] = []
         tasks_by_ref: dict[str, TaskDefinition] = {}
         existing_names = {task.name for task in self._task_workspace}
+        tasks_by_reuse_key = {
+            self._curriculum_task_reuse_key(task): task
+            for task in self._task_workspace
+        }
 
         for index, raw_environment in enumerate(environments):
             if not isinstance(raw_environment, dict):
                 raise ValueError(f"Environment entry {index + 1} must be an object.")
             task = self._task_from_curriculum_environment(raw_environment)
-            task.name = self._unique_task_name_from_set(task.name, existing_names)
-            existing_names.add(task.name)
-            imported_tasks.append(task)
+            task_reuse_key = self._curriculum_task_reuse_key(task)
+            reusable_task = tasks_by_reuse_key.get(task_reuse_key)
+            if reusable_task is None:
+                task.name = self._unique_task_name_from_set(task.name, existing_names)
+                existing_names.add(task.name)
+                imported_tasks.append(task)
+                reusable_task = task
+                tasks_by_reuse_key[task_reuse_key] = reusable_task
 
             raw_task_id = raw_environment.get("task_id", index)
-            tasks_by_ref[str(raw_task_id)] = task
-            tasks_by_ref[str(index)] = task
+            tasks_by_ref[str(raw_task_id)] = reusable_task
+            tasks_by_ref[str(index)] = reusable_task
 
         return imported_tasks, tasks_by_ref
+
+    def _curriculum_task_reuse_key(self, task: TaskDefinition) -> str:
+        task_payload = task.to_dict()
+        return json.dumps(
+            {
+                "environment_id": task_payload.get("environment_id"),
+                "name": task_payload.get("name"),
+                "config": task_payload.get("config"),
+                "reward_config": task_payload.get("reward_config"),
+                "termination_config": task_payload.get("termination_config"),
+            },
+            sort_keys=True,
+        )
 
     def _task_from_curriculum_environment(self, payload: dict[str, Any]) -> TaskDefinition:
         metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}

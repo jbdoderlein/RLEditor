@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Signal
@@ -63,17 +62,31 @@ METRIC_SPECS: list[tuple[str, str, str]] = [
     ("fps", "FPS", "#577590"),
 ]
 
+AXIS_METRIC_KEYS = {"episode_length_mean", "cumulative_reward"}
+
+
+def _format_axis_value(value: float) -> str:
+    absolute = abs(value)
+    if absolute >= 1000.0 or (0.0 < absolute < 0.01):
+        return f"{value:.1e}"
+    if absolute >= 100.0:
+        return f"{value:.0f}"
+    if absolute >= 10.0:
+        return f"{value:.1f}"
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
 
 class SparklineWidget(QWidget):
     def __init__(
         self,
         *,
         color: str,
-        max_points: int = 160,
+        show_axes: bool = False,
     ) -> None:
         super().__init__()
-        self._values: deque[float] = deque(maxlen=max_points)
+        self._values: list[float] = []
         self._color = QColor(color)
+        self._show_axes = show_axes
         self.setMinimumHeight(56)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -90,25 +103,45 @@ class SparklineWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = self.rect().adjusted(2, 2, -2, -2)
+        plot_rect = rect.adjusted(34, 6, -4, -16) if self._show_axes else rect
         painter.fillRect(rect, QColor("#f9fbff"))
 
         if len(self._values) < 2:
+            if self._show_axes:
+                value = self._values[0] if self._values else None
+                self._draw_axes(
+                    painter,
+                    rect=rect,
+                    plot_rect=plot_rect,
+                    min_value=value,
+                    max_value=value,
+                    count=len(self._values),
+                )
             painter.setPen(QPen(QColor("#d0d7e4"), 1, Qt.PenStyle.DashLine))
-            painter.drawLine(rect.left(), rect.center().y(), rect.right(), rect.center().y())
+            painter.drawLine(plot_rect.left(), plot_rect.center().y(), plot_rect.right(), plot_rect.center().y())
             return
 
         min_value = min(self._values)
         max_value = max(self._values)
         span = max(max_value - min_value, 1e-6)
+        if self._show_axes:
+            self._draw_axes(
+                painter,
+                rect=rect,
+                plot_rect=plot_rect,
+                min_value=min_value,
+                max_value=max_value,
+                count=len(self._values),
+            )
 
         points: list[tuple[float, float]] = []
-        width = max(1, rect.width())
-        height = max(1, rect.height())
+        width = max(1, plot_rect.width())
+        height = max(1, plot_rect.height())
         count = len(self._values)
         for idx, value in enumerate(self._values):
-            x = rect.left() + (idx / (count - 1)) * width
+            x = plot_rect.left() + (idx / (count - 1)) * width
             y_ratio = (value - min_value) / span
-            y = rect.bottom() - y_ratio * height
+            y = plot_rect.bottom() - y_ratio * height
             points.append((x, y))
 
         path = QPainterPath()
@@ -120,6 +153,40 @@ class SparklineWidget(QWidget):
         painter.setPen(QPen(self._color, 2.0))
         painter.drawPath(path)
 
+    def _draw_axes(
+        self,
+        painter: QPainter,
+        *,
+        rect,
+        plot_rect,
+        min_value: float | None,
+        max_value: float | None,
+        count: int,
+    ) -> None:
+        painter.setPen(QPen(QColor("#94a3b8"), 1.0))
+        painter.drawLine(plot_rect.left(), plot_rect.top(), plot_rect.left(), plot_rect.bottom())
+        painter.drawLine(plot_rect.left(), plot_rect.bottom(), plot_rect.right(), plot_rect.bottom())
+
+        font = painter.font()
+        original_point_size = font.pointSize()
+        if original_point_size > 0:
+            font.setPointSize(max(7, original_point_size - 2))
+            painter.setFont(font)
+
+        painter.setPen(QPen(QColor("#64748b"), 1.0))
+        metrics = painter.fontMetrics()
+        if min_value is not None and max_value is not None:
+            painter.drawText(rect.left(), plot_rect.top() + metrics.ascent(), _format_axis_value(max_value))
+            painter.drawText(rect.left(), plot_rect.bottom(), _format_axis_value(min_value))
+        if count > 1:
+            end_label = str(count - 1)
+            painter.drawText(plot_rect.left(), rect.bottom(), "0")
+            painter.drawText(
+                plot_rect.right() - metrics.horizontalAdvance(end_label),
+                rect.bottom(),
+                end_label,
+            )
+
 
 class MetricCard(QFrame):
     def __init__(
@@ -127,6 +194,7 @@ class MetricCard(QFrame):
         *,
         title: str,
         color: str,
+        show_axes: bool = False,
     ) -> None:
         super().__init__()
         self.setObjectName("MetricCardFrame")
@@ -138,7 +206,7 @@ class MetricCard(QFrame):
         self.title_label.setObjectName("MetricTitleLabel")
         self.value_label = QLabel("--")
         self.value_label.setObjectName("MetricValueLabel")
-        self.sparkline = SparklineWidget(color=color)
+        self.sparkline = SparklineWidget(color=color, show_axes=show_axes)
 
         layout.addWidget(self.title_label)
         layout.addWidget(self.value_label)
@@ -177,7 +245,11 @@ class RunMetricPanel(QGroupBox):
             grid.setRowStretch(row, 1)
 
         for index, (key, card_title, color) in enumerate(METRIC_SPECS):
-            card = MetricCard(title=card_title, color=color)
+            card = MetricCard(
+                title=card_title,
+                color=color,
+                show_axes=key in AXIS_METRIC_KEYS,
+            )
             row = index // 3
             col = index % 3
             grid.addWidget(card, row, col)
@@ -408,6 +480,7 @@ class TrainingMonitorView(QWidget):
 
     def _build_breakpoints_group(self) -> QGroupBox:
         group = QGroupBox("Training Breakpoints")
+        self.breakpoint_group = group
         layout = QVBoxLayout(group)
 
         controls = QHBoxLayout()
@@ -450,6 +523,10 @@ class TrainingMonitorView(QWidget):
         layout.addWidget(self.breakpoint_list)
 
         self._sync_breakpoint_inputs()
+        group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        fixed_height = group.minimumSizeHint().height()
+        group.setMinimumHeight(fixed_height)
+        group.setMaximumHeight(fixed_height)
         return group
 
     def _build_metrics_group(self) -> QGroupBox:
