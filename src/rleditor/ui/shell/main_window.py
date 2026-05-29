@@ -372,7 +372,7 @@ class MainWindow(QMainWindow):
         self._live_edit_waiting_for_step = False
         self._live_edit_checkpoint_stop_pending = False
         self._live_edit_completed_steps = 0
-        self._live_edit_initial_checkpoint = deepcopy(initial_checkpoint)
+        self._live_edit_initial_checkpoint = initial_checkpoint
         self.episode_view.clear_episodes()
         self._set_status_busy("live_edit", True)
         self._log_interaction(
@@ -422,7 +422,7 @@ class MainWindow(QMainWindow):
             )
         ]
 
-        snapshot = self._training_service.history_snapshot()
+        snapshot = self._training_service.history_snapshot(deep=False)
         checkpoints_by_id = {
             checkpoint.checkpoint_id: checkpoint
             for checkpoint in snapshot.checkpoints

@@ -1144,6 +1144,120 @@ def test_checkpoint_history_live_edit_replays_deepest_descendant_branch() -> Non
     assert any(event == "live_edit_replay_completed" for event, _payload in interaction_logger.records)
 
 
+def test_checkpoint_history_live_edit_planning_avoids_deep_history_snapshot() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="tiny_env",
+            display_name="Tiny",
+            description="Tiny live edit planning plugin",
+            backend=_TinyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="tiny_env",
+    )
+    task_snapshot = TaskSnapshot(
+        environment_id="tiny_env",
+        task_name="Tiny Task",
+        task_id="task_tiny",
+    )
+    run_config = RunConfig(algorithm="q_learning", max_episodes=1, max_steps_per_episode=5)
+    runs = [
+        TrainingRun(
+            run_id="run_001",
+            task_id="task_tiny",
+            status=TrainingStatus.FINISHED,
+            metadata={"algorithm": "q_learning", "run_config": run_config.to_dict()},
+        ),
+        TrainingRun(
+            run_id="run_002",
+            task_id="task_tiny",
+            status=TrainingStatus.FINISHED,
+            parent_checkpoint_id="checkpoint_001",
+            metadata={"algorithm": "q_learning", "run_config": run_config.to_dict()},
+        ),
+    ]
+    learner_state = {
+        "algorithm": "q_learning",
+        "q_values": [
+            {"state_key": str(index), "action": 0, "value": float(index)}
+            for index in range(500)
+        ],
+    }
+    checkpoints = [
+        Checkpoint(
+            checkpoint_id="checkpoint_001",
+            label="Checkpoint 001",
+            created_at="2026-05-17 09:00:00",
+            reason="run_finished",
+            run_id="run_001",
+            task_id="task_tiny",
+            task_name="Tiny Task",
+            step=2,
+            episode=1,
+            task_snapshot=task_snapshot,
+            metadata={"algorithm": "q_learning", "learner_state": learner_state},
+        ),
+        Checkpoint(
+            checkpoint_id="checkpoint_002",
+            label="Checkpoint 002",
+            created_at="2026-05-17 09:01:00",
+            reason="run_finished",
+            parent_checkpoint_id="checkpoint_001",
+            run_id="run_002",
+            task_id="task_tiny",
+            task_name="Tiny Task",
+            step=2,
+            episode=1,
+            task_snapshot=task_snapshot,
+            metadata={"algorithm": "q_learning", "learner_state": learner_state},
+        ),
+    ]
+    training_service.load_history(
+        TrainingHistorySnapshot(
+            runs=runs,
+            checkpoints=checkpoints,
+            episodes_by_run={},
+            run_task_snapshots={run.run_id: task_snapshot for run in runs},
+        )
+    )
+    window.history_view.set_history(training_service.history_snapshot(deep=False))
+    edge = window.history_view.graph_widget.edge_for_id("edge:checkpoint_002")
+    assert edge is not None
+
+    original_history_snapshot = training_service.history_snapshot
+    history_snapshot_deep_args: list[bool] = []
+
+    def _capture_history_snapshot(*, deep: bool = True):
+        history_snapshot_deep_args.append(deep)
+        return original_history_snapshot(deep=deep)
+
+    captured_start: dict[str, object] = {}
+
+    def _capture_start(task, config, **kwargs):
+        captured_start["task"] = task
+        captured_start["config"] = config
+        captured_start["kwargs"] = kwargs
+
+    training_service.history_snapshot = _capture_history_snapshot  # type: ignore[method-assign]
+    training_service.start = _capture_start  # type: ignore[method-assign]
+
+    window._on_training_edge_live_edit_requested(
+        edge,
+        RunConfig(algorithm="q_learning", max_episodes=1, max_steps_per_episode=5),
+    )
+
+    assert history_snapshot_deep_args == [False]
+    assert captured_start["kwargs"]["initial_checkpoint"] is edge.source_checkpoint
+
+
 def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() -> None:
     _app()
     registry = PluginRegistry()

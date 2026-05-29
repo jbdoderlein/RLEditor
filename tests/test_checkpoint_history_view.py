@@ -642,6 +642,7 @@ def test_checkpoint_history_view_builds_curriculum_export_for_selected_lineage()
     _app()
     view = CheckpointHistoryView()
     assert view.export_curriculum_plan_button.text() == "Export Curriculum"
+    assert view.show_training_report_button.text() == "Show Training Report"
     assert view.import_curriculum_button.text() == "Import Curriculum"
     assert view.export_curriculum_button.text() == "Export Trace"
     main_task = TaskSnapshot(
@@ -793,3 +794,96 @@ def test_checkpoint_history_view_builds_curriculum_export_for_selected_lineage()
     serialized_plan = json.dumps(plan_payload)
     assert "recorded_episode" not in serialized_plan
     assert "training_runs" not in plan_payload
+
+
+def test_checkpoint_history_view_builds_training_report_for_selected_lineage() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    main_task = TaskSnapshot(
+        environment_id="tiny_env",
+        task_name="Main Task",
+        task_id="task_main",
+        task_config={"difficulty": 1},
+    )
+    subtask = TaskSnapshot(
+        environment_id="tiny_env",
+        task_name="Sub Task",
+        task_id="task_sub",
+        task_config={"difficulty": 2},
+    )
+    run_1 = TrainingRun(
+        run_id="run_main",
+        task_id="task_main",
+        status=TrainingStatus.FINISHED,
+        metadata={"run_config": RunConfig(max_episodes=2).to_dict()},
+    )
+    run_2 = TrainingRun(
+        run_id="run_sub",
+        task_id="task_sub",
+        status=TrainingStatus.FINISHED,
+        parent_checkpoint_id="checkpoint_001",
+        metadata={"run_config": RunConfig(max_episodes=1).to_dict()},
+    )
+    checkpoint_1 = Checkpoint(
+        checkpoint_id="checkpoint_001",
+        label="Checkpoint 001",
+        created_at="2026-05-17 10:00:00",
+        reason="run_finished",
+        run_id="run_main",
+        task_id="task_main",
+        task_name="Main Task",
+        step=20,
+        episode=2,
+        task_snapshot=main_task,
+    )
+    checkpoint_2 = Checkpoint(
+        checkpoint_id="checkpoint_002",
+        label="Checkpoint 002",
+        created_at="2026-05-17 10:05:00",
+        reason="run_finished",
+        parent_checkpoint_id="checkpoint_001",
+        run_id="run_sub",
+        task_id="task_sub",
+        task_name="Sub Task",
+        step=10,
+        episode=1,
+        task_snapshot=subtask,
+    )
+    view.set_history(
+        TrainingHistorySnapshot(
+            runs=[run_1, run_2],
+            checkpoints=[checkpoint_1, checkpoint_2],
+            episodes_by_run={
+                "run_main": [
+                    EpisodeTrace(episode_id=1, run_id="run_main", total_reward=1.0, success=True),
+                    EpisodeTrace(episode_id=2, run_id="run_main", total_reward=-0.5, success=False),
+                ],
+                "run_sub": [
+                    EpisodeTrace(episode_id=1, run_id="run_sub", total_reward=2.0, success=True),
+                ],
+            },
+            run_task_snapshots={
+                "run_main": main_task,
+                "run_sub": subtask,
+            },
+        )
+    )
+
+    assert view.show_training_report_button.isEnabled()
+    report = view._training_report_payload(checkpoint_2)
+
+    assert report["total_episodes"] == 3
+    assert report["recorded_episode_count"] == 3
+    assert report["cumulative_reward_points"] == [
+        (1, 1.0),
+        (2, 0.5),
+        (3, 2.5),
+    ]
+    assert report["task_switches"] == [(2, "Sub Task")]
+
+    dialog = view._build_training_report_dialog(checkpoint_2)
+    try:
+        assert dialog.report["target_checkpoint_id"] == "checkpoint_002"
+        assert dialog.windowTitle() == "Training report"
+    finally:
+        dialog.close()

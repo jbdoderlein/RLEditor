@@ -27,8 +27,8 @@ from eval.frozen_lake import FrozenLakeEnv, generate_random_map
 # Global defaults
 # ---------------------------------------------------------------------------
 
-SIZE        = 12                  # grid side length
-MAX_DENSITY = 43 / (SIZE * SIZE)  # 0.2986 — largest discrete density < 30%
+SIZE        = 16                  # grid side length
+MAX_DENSITY = 0.3  # 0.2986 — largest discrete density < 30%
 RQ1_N       = 30                  # number of target tasks for RQ1
 RQ1_CURRICULUM_STEPS = 4          # maps per RQ1 curriculum, including empty + target
 RQ1_EPISODES_PER_STEP = 1000      # training episodes for each RQ1 curriculum step

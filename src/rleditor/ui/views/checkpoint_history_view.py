@@ -7,7 +7,7 @@ from math import hypot
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
+from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -288,6 +288,125 @@ class _TrainingEdgeEditDialog(QDialog):
         if config.max_steps_per_episode is not None:
             return int(config.max_steps_per_episode)
         return DEFAULT_MAX_STEPS_PER_EPISODE
+
+
+class _TrainingReportChart(QWidget):
+    def __init__(
+        self,
+        *,
+        points: list[tuple[int, float]],
+        task_switches: list[tuple[int, str]],
+        total_episodes: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.points = list(points)
+        self.task_switches = list(task_switches)
+        self.total_episodes = max(0, int(total_episodes))
+        self.setMinimumSize(620, 300)
+
+    def paintEvent(self, _event: QPaintEvent) -> None:  # type: ignore[override]
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect().adjusted(12, 12, -12, -12)
+        plot_rect = rect.adjusted(52, 12, -16, -38)
+        painter.fillRect(rect, QColor("#ffffff"))
+
+        painter.setPen(QPen(QColor("#94a3b8"), 1.0))
+        painter.drawLine(plot_rect.left(), plot_rect.top(), plot_rect.left(), plot_rect.bottom())
+        painter.drawLine(plot_rect.left(), plot_rect.bottom(), plot_rect.right(), plot_rect.bottom())
+
+        if not self.points:
+            painter.setPen(QColor("#64748b"))
+            painter.drawText(
+                plot_rect,
+                Qt.AlignmentFlag.AlignCenter,
+                "No recorded reward traces are available for this path.",
+            )
+            return
+
+        max_x = max(self.total_episodes, max(episode for episode, _reward in self.points), 1)
+        rewards = [reward for _episode, reward in self.points]
+        min_y = min(0.0, min(rewards))
+        max_y = max(0.0, max(rewards))
+        y_span = max(max_y - min_y, 1e-9)
+
+        def map_x(episode: int) -> float:
+            return plot_rect.left() + (max(0, min(episode, max_x)) / max_x) * plot_rect.width()
+
+        def map_y(reward: float) -> float:
+            return plot_rect.bottom() - ((reward - min_y) / y_span) * plot_rect.height()
+
+        switch_pen = QPen(QColor("#64748b"), 1.0, Qt.PenStyle.DashLine)
+        painter.setPen(switch_pen)
+        metrics = painter.fontMetrics()
+        for episode, task_name in self.task_switches:
+            if episode <= 0 or episode >= max_x:
+                continue
+            x = map_x(episode)
+            painter.drawLine(int(x), plot_rect.top(), int(x), plot_rect.bottom())
+            label = task_name if len(task_name) <= 22 else task_name[:19] + "..."
+            painter.drawText(
+                int(x) + 4,
+                plot_rect.top() + metrics.ascent() + 2,
+                label,
+            )
+
+        path = QPainterPath()
+        first_episode, first_reward = self.points[0]
+        path.moveTo(map_x(first_episode), map_y(first_reward))
+        for episode, reward in self.points[1:]:
+            path.lineTo(map_x(episode), map_y(reward))
+
+        painter.setPen(QPen(QColor("#7c3aed"), 2.2))
+        painter.drawPath(path)
+
+        painter.setPen(QColor("#334155"))
+        painter.drawText(int(rect.left()), int(plot_rect.top() + metrics.ascent()), f"{max_y:.2f}")
+        painter.drawText(int(rect.left()), int(plot_rect.bottom()), f"{min_y:.2f}")
+        painter.drawText(int(plot_rect.left()), int(rect.bottom()), "0")
+        max_x_label = str(max_x)
+        painter.drawText(
+            int(plot_rect.right() - metrics.horizontalAdvance(max_x_label)),
+            int(rect.bottom()),
+            max_x_label,
+        )
+        painter.drawText(
+            int(plot_rect.center().x() - metrics.horizontalAdvance("Training episode") / 2),
+            int(rect.bottom()),
+            "Training episode",
+        )
+
+
+class _TrainingReportDialog(QDialog):
+    def __init__(self, report: dict[str, object], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Training report")
+        self.resize(760, 460)
+        self.report = report
+
+        total_episodes = int(report.get("total_episodes", 0))
+        recorded_episodes = int(report.get("recorded_episode_count", 0))
+        target_label = str(report.get("target_label", "Selected checkpoint"))
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel(f"Path: {target_label}", self))
+        root.addWidget(QLabel(f"Total training episodes: {total_episodes}", self))
+        root.addWidget(QLabel(f"Recorded reward episodes: {recorded_episodes}", self))
+        root.addWidget(
+            _TrainingReportChart(
+                points=list(report.get("cumulative_reward_points", [])),
+                task_switches=list(report.get("task_switches", [])),
+                total_episodes=total_episodes,
+                parent=self,
+            ),
+            1,
+        )
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
 
 
 def _q_values_from_checkpoint(checkpoint: Checkpoint) -> dict[tuple[str, int], float]:
@@ -798,6 +917,11 @@ class CheckpointHistoryView(QWidget):
             "Export only the executable curriculum structure: tasks and training steps."
         )
         self.export_curriculum_plan_button.setEnabled(False)
+        self.show_training_report_button = QPushButton("Show Training Report", right_panel)
+        self.show_training_report_button.setToolTip(
+            "Show aggregate training information from the lineage start to the selected checkpoint."
+        )
+        self.show_training_report_button.setEnabled(False)
         self.export_checkpoint_button = QPushButton("Export Checkpoint", right_panel)
         self.export_checkpoint_button.setToolTip(
             "Export only the selected checkpoint JSON."
@@ -854,6 +978,7 @@ class CheckpointHistoryView(QWidget):
         actions_layout = QVBoxLayout()
         plan_buttons_layout = QHBoxLayout()
         plan_buttons_layout.addWidget(self.export_curriculum_plan_button)
+        plan_buttons_layout.addWidget(self.show_training_report_button)
         plan_buttons_layout.addWidget(self.import_curriculum_button)
         plan_buttons_layout.addStretch(1)
 
@@ -895,6 +1020,7 @@ class CheckpointHistoryView(QWidget):
             lambda _checked=False: self._export_selected_curriculum(include_episode_traces=True)
         )
         self.export_curriculum_plan_button.clicked.connect(self._export_selected_curriculum_plan)
+        self.show_training_report_button.clicked.connect(self._show_training_report_for_selected_checkpoint)
         self.export_checkpoint_button.clicked.connect(self._export_selected_checkpoint)
         self.evaluate_checkpoint_button.clicked.connect(self._emit_evaluate_selected_checkpoint)
         self.live_edit_button.clicked.connect(self._request_live_edit_for_selected_edge)
@@ -1204,6 +1330,7 @@ class CheckpointHistoryView(QWidget):
     def _set_export_buttons_enabled(self, enabled: bool) -> None:
         self.export_curriculum_button.setEnabled(enabled)
         self.export_curriculum_plan_button.setEnabled(enabled)
+        self.show_training_report_button.setEnabled(enabled)
         self.export_checkpoint_button.setEnabled(enabled)
         self.evaluate_checkpoint_button.setEnabled(enabled)
 
@@ -1223,6 +1350,20 @@ class CheckpointHistoryView(QWidget):
 
     def _build_q_table_dialog(self, checkpoint: Checkpoint) -> _QTableDialog:
         return _QTableDialog(checkpoint, self)
+
+    def _show_training_report_for_selected_checkpoint(self) -> None:
+        checkpoint = self._selected_export_checkpoint()
+        if checkpoint is None:
+            QMessageBox.warning(
+                self,
+                "Training Report",
+                "Select a checkpoint before showing a training report.",
+            )
+            return
+        self._build_training_report_dialog(checkpoint).exec()
+
+    def _build_training_report_dialog(self, checkpoint: Checkpoint) -> _TrainingReportDialog:
+        return _TrainingReportDialog(self._training_report_payload(checkpoint), self)
 
     def _export_selected_curriculum(self, *, include_episode_traces: bool) -> None:
         checkpoint = self._selected_export_checkpoint()
@@ -1420,6 +1561,89 @@ class CheckpointHistoryView(QWidget):
 
     def _checkpoint_export_payload(self, checkpoint: Checkpoint) -> dict[str, object]:
         return checkpoint.to_dict()
+
+    def _training_report_payload(self, target_checkpoint: Checkpoint) -> dict[str, object]:
+        lineage = self._checkpoint_lineage(target_checkpoint)
+        if not lineage:
+            lineage = [target_checkpoint]
+
+        cumulative_reward = 0.0
+        cumulative_episode_count = 0
+        recorded_episode_count = 0
+        reward_points: list[tuple[int, float]] = []
+        task_switches: list[tuple[int, str]] = []
+        previous_checkpoint: Checkpoint | None = None
+        previous_task_key: str | None = None
+
+        for checkpoint in lineage:
+            task_snapshot = (
+                self._snapshot.run_task_snapshots.get(checkpoint.run_id or "")
+                or checkpoint.task_snapshot
+            )
+            task_name = task_snapshot.task_name if task_snapshot is not None else (checkpoint.task_name or "unknown")
+            task_key = self._training_report_task_key(task_snapshot, task_name)
+            if previous_task_key is not None and task_key != previous_task_key:
+                task_switches.append((cumulative_episode_count, task_name))
+
+            segment_episode_count = self._training_episode_delta(checkpoint, previous_checkpoint)
+            segment_start_episode = 0
+            if (
+                previous_checkpoint is not None
+                and previous_checkpoint.run_id is not None
+                and previous_checkpoint.run_id == checkpoint.run_id
+            ):
+                segment_start_episode = previous_checkpoint.episode
+
+            for trace in sorted(
+                self._episodes_for_checkpoint_segment(checkpoint, previous_checkpoint),
+                key=lambda item: item.episode_id,
+            ):
+                local_episode = max(1, trace.episode_id - segment_start_episode)
+                global_episode = cumulative_episode_count + local_episode
+                cumulative_reward += trace.total_reward
+                recorded_episode_count += 1
+                reward_points.append((global_episode, cumulative_reward))
+
+            cumulative_episode_count += segment_episode_count
+            previous_task_key = task_key
+            previous_checkpoint = checkpoint
+
+        return {
+            "target_checkpoint_id": target_checkpoint.checkpoint_id,
+            "target_label": target_checkpoint.label or target_checkpoint.checkpoint_id,
+            "total_episodes": cumulative_episode_count,
+            "recorded_episode_count": recorded_episode_count,
+            "cumulative_reward_points": reward_points,
+            "task_switches": task_switches,
+        }
+
+    def _training_report_task_key(self, task_snapshot: TaskSnapshot | None, fallback_name: str) -> str:
+        if task_snapshot is None:
+            return fallback_name
+        return json.dumps(
+            {
+                "environment_id": task_snapshot.environment_id,
+                "task_id": task_snapshot.task_id,
+                "task_name": task_snapshot.task_name,
+                "task_config": task_snapshot.task_config,
+                "reward_config": task_snapshot.reward_config,
+                "termination_config": task_snapshot.termination_config,
+            },
+            sort_keys=True,
+        )
+
+    def _training_episode_delta(
+        self,
+        checkpoint: Checkpoint,
+        previous_checkpoint: Checkpoint | None,
+    ) -> int:
+        if (
+            previous_checkpoint is not None
+            and previous_checkpoint.run_id is not None
+            and previous_checkpoint.run_id == checkpoint.run_id
+        ):
+            return max(0, checkpoint.episode - previous_checkpoint.episode)
+        return max(0, checkpoint.episode)
 
     def _checkpoint_from_import_payload(self, payload: object) -> Checkpoint:
         if not isinstance(payload, dict):
