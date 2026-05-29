@@ -887,3 +887,21 @@ def test_checkpoint_history_view_builds_training_report_for_selected_lineage() -
         assert dialog.windowTitle() == "Training report"
     finally:
         dialog.close()
+
+    view.graph_widget.select_node("checkpoint_001")
+    view.graph_widget.select_node("checkpoint_002", additive=True)
+    selected_checkpoints = view._selected_training_report_checkpoints()
+    assert [checkpoint.checkpoint_id for checkpoint in selected_checkpoints] == [
+        "checkpoint_001",
+        "checkpoint_002",
+    ]
+
+    multi_dialog = view._build_training_report_dialog(selected_checkpoints)
+    try:
+        assert [report["target_checkpoint_id"] for report in multi_dialog.reports] == [
+            "checkpoint_001",
+            "checkpoint_002",
+        ]
+        assert multi_dialog.report["reports"][1]["target_checkpoint_id"] == "checkpoint_002"
+    finally:
+        multi_dialog.close()

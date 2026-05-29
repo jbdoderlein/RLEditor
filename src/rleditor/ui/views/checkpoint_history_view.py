@@ -294,15 +294,82 @@ class _TrainingReportChart(QWidget):
     def __init__(
         self,
         *,
-        points: list[tuple[int, float]],
-        task_switches: list[tuple[int, str]],
-        total_episodes: int,
+        points: list[tuple[int, float]] | None = None,
+        task_switches: list[tuple[int, str]] | None = None,
+        total_episodes: int = 0,
+        series: list[dict[str, object]] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.points = list(points)
-        self.task_switches = list(task_switches)
-        self.total_episodes = max(0, int(total_episodes))
+        if series is None:
+            series = [
+                {
+                    "label": "Training path",
+                    "points": list(points or []),
+                    "task_switches": list(task_switches or []),
+                    "total_episodes": total_episodes,
+                }
+            ]
+        colors = [
+            QColor("#7c3aed"),
+            QColor("#0f766e"),
+            QColor("#b45309"),
+            QColor("#2563eb"),
+            QColor("#be123c"),
+            QColor("#4b5563"),
+        ]
+        self.series: list[dict[str, object]] = []
+        for index, item in enumerate(series):
+            raw_points = item.get("points", []) if isinstance(item, dict) else []
+            normalized_points: list[tuple[int, float]] = []
+            if isinstance(raw_points, list):
+                for point in raw_points:
+                    if not isinstance(point, (tuple, list)) or len(point) != 2:
+                        continue
+                    try:
+                        normalized_points.append((int(point[0]), float(point[1])))
+                    except (TypeError, ValueError):
+                        continue
+
+            raw_switches = item.get("task_switches", []) if isinstance(item, dict) else []
+            normalized_switches: list[tuple[int, str]] = []
+            if isinstance(raw_switches, list):
+                for task_switch in raw_switches:
+                    if not isinstance(task_switch, (tuple, list)) or len(task_switch) != 2:
+                        continue
+                    try:
+                        normalized_switches.append((int(task_switch[0]), str(task_switch[1])))
+                    except (TypeError, ValueError):
+                        continue
+
+            try:
+                item_total_episodes = (
+                    int(item.get("total_episodes", 0))
+                    if isinstance(item, dict)
+                    else 0
+                )
+            except (TypeError, ValueError):
+                item_total_episodes = 0
+
+            self.series.append(
+                {
+                    "label": (
+                        str(item.get("label", f"Path {index + 1}"))
+                        if isinstance(item, dict)
+                        else f"Path {index + 1}"
+                    ),
+                    "points": normalized_points,
+                    "task_switches": normalized_switches,
+                    "total_episodes": max(0, item_total_episodes),
+                    "color": colors[index % len(colors)],
+                }
+            )
+
+        self.points = list(self.series[0]["points"]) if self.series else []
+        self.task_switches = list(self.series[0]["task_switches"]) if self.series else []
+        self.total_episodes = max(
+            [int(item["total_episodes"]) for item in self.series] or [max(0, int(total_episodes))]
+        )
         self.setMinimumSize(620, 300)
 
     def paintEvent(self, _event: QPaintEvent) -> None:  # type: ignore[override]
@@ -310,14 +377,22 @@ class _TrainingReportChart(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = self.rect().adjusted(12, 12, -12, -12)
-        plot_rect = rect.adjusted(52, 12, -16, -38)
+        metrics = painter.fontMetrics()
+        plot_top_margin = 30 if len(self.series) > 1 else 12
+        plot_rect = rect.adjusted(52, plot_top_margin, -16, -38)
         painter.fillRect(rect, QColor("#ffffff"))
 
         painter.setPen(QPen(QColor("#94a3b8"), 1.0))
         painter.drawLine(plot_rect.left(), plot_rect.top(), plot_rect.left(), plot_rect.bottom())
         painter.drawLine(plot_rect.left(), plot_rect.bottom(), plot_rect.right(), plot_rect.bottom())
 
-        if not self.points:
+        all_points = [
+            point
+            for item in self.series
+            for point in item["points"]
+            if isinstance(point, tuple) and len(point) == 2
+        ]
+        if not all_points:
             painter.setPen(QColor("#64748b"))
             painter.drawText(
                 plot_rect,
@@ -326,8 +401,24 @@ class _TrainingReportChart(QWidget):
             )
             return
 
-        max_x = max(self.total_episodes, max(episode for episode, _reward in self.points), 1)
-        rewards = [reward for _episode, reward in self.points]
+        if len(self.series) > 1:
+            legend_x = plot_rect.left()
+            legend_y = rect.top() + metrics.ascent() + 2
+            for item in self.series:
+                label = str(item["label"])
+                if len(label) > 34:
+                    label = label[:31] + "..."
+                color = item["color"]
+                painter.setPen(QPen(color, 2.4))
+                painter.drawLine(int(legend_x), int(legend_y - 4), int(legend_x + 16), int(legend_y - 4))
+                painter.setPen(QColor("#334155"))
+                painter.drawText(int(legend_x + 20), int(legend_y), label)
+                legend_x += 32 + metrics.horizontalAdvance(label)
+                if legend_x > plot_rect.right() - 160:
+                    break
+
+        max_x = max(self.total_episodes, max(episode for episode, _reward in all_points), 1)
+        rewards = [reward for _episode, reward in all_points]
         min_y = min(0.0, min(rewards))
         max_y = max(0.0, max(rewards))
         y_span = max(max_y - min_y, 1e-9)
@@ -340,27 +431,41 @@ class _TrainingReportChart(QWidget):
 
         switch_pen = QPen(QColor("#64748b"), 1.0, Qt.PenStyle.DashLine)
         painter.setPen(switch_pen)
-        metrics = painter.fontMetrics()
-        for episode, task_name in self.task_switches:
+        drawn_switches: set[tuple[int, str]] = set()
+        task_switches = [
+            task_switch
+            for item in self.series
+            for task_switch in item["task_switches"]
+            if isinstance(task_switch, tuple) and len(task_switch) == 2
+        ]
+        for episode, task_name in task_switches:
+            if (episode, task_name) in drawn_switches:
+                continue
+            drawn_switches.add((episode, task_name))
             if episode <= 0 or episode >= max_x:
                 continue
             x = map_x(episode)
             painter.drawLine(int(x), plot_rect.top(), int(x), plot_rect.bottom())
-            label = task_name if len(task_name) <= 22 else task_name[:19] + "..."
-            painter.drawText(
-                int(x) + 4,
-                plot_rect.top() + metrics.ascent() + 2,
-                label,
-            )
+            if len(self.series) == 1:
+                label = task_name if len(task_name) <= 22 else task_name[:19] + "..."
+                painter.drawText(
+                    int(x) + 4,
+                    plot_rect.top() + metrics.ascent() + 2,
+                    label,
+                )
 
-        path = QPainterPath()
-        first_episode, first_reward = self.points[0]
-        path.moveTo(map_x(first_episode), map_y(first_reward))
-        for episode, reward in self.points[1:]:
-            path.lineTo(map_x(episode), map_y(reward))
+        for item in self.series:
+            item_points = list(item["points"])
+            if not item_points:
+                continue
+            path = QPainterPath()
+            first_episode, first_reward = item_points[0]
+            path.moveTo(map_x(first_episode), map_y(first_reward))
+            for episode, reward in item_points[1:]:
+                path.lineTo(map_x(episode), map_y(reward))
 
-        painter.setPen(QPen(QColor("#7c3aed"), 2.2))
-        painter.drawPath(path)
+            painter.setPen(QPen(item["color"], 2.2))
+            painter.drawPath(path)
 
         painter.setPen(QColor("#334155"))
         painter.drawText(int(rect.left()), int(plot_rect.top() + metrics.ascent()), f"{max_y:.2f}")
@@ -385,20 +490,28 @@ class _TrainingReportDialog(QDialog):
         self.setWindowTitle("Training report")
         self.resize(760, 460)
         self.report = report
-
-        total_episodes = int(report.get("total_episodes", 0))
-        recorded_episodes = int(report.get("recorded_episode_count", 0))
-        target_label = str(report.get("target_label", "Selected checkpoint"))
+        self.reports = self._normalized_reports(report)
 
         root = QVBoxLayout(self)
-        root.addWidget(QLabel(f"Path: {target_label}", self))
-        root.addWidget(QLabel(f"Total training episodes: {total_episodes}", self))
-        root.addWidget(QLabel(f"Recorded reward episodes: {recorded_episodes}", self))
+        if len(self.reports) == 1:
+            single_report = self.reports[0]
+            total_episodes = int(single_report.get("total_episodes", 0))
+            recorded_episodes = int(single_report.get("recorded_episode_count", 0))
+            target_label = str(single_report.get("target_label", "Selected checkpoint"))
+            root.addWidget(QLabel(f"Path: {target_label}", self))
+            root.addWidget(QLabel(f"Total training episodes: {total_episodes}", self))
+            root.addWidget(QLabel(f"Recorded reward episodes: {recorded_episodes}", self))
+        else:
+            root.addWidget(QLabel(f"Selected checkpoints: {len(self.reports)}", self))
+            summary = QTextEdit(self)
+            summary.setReadOnly(True)
+            summary.setMaximumHeight(150)
+            summary.setHtml(self._summary_html())
+            root.addWidget(summary)
+
         root.addWidget(
             _TrainingReportChart(
-                points=list(report.get("cumulative_reward_points", [])),
-                task_switches=list(report.get("task_switches", [])),
-                total_episodes=total_episodes,
+                series=self._chart_series(),
                 parent=self,
             ),
             1,
@@ -407,6 +520,54 @@ class _TrainingReportDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+
+    def _normalized_reports(self, report: dict[str, object]) -> list[dict[str, object]]:
+        reports = report.get("reports")
+        if isinstance(reports, list):
+            normalized = [item for item in reports if isinstance(item, dict)]
+            if normalized:
+                return normalized
+        return [report]
+
+    def _summary_html(self) -> str:
+        rows = [
+            "<tr><th>Checkpoint</th><th>Total training episodes</th><th>Recorded reward episodes</th></tr>"
+        ]
+        for report in self.reports:
+            label = escape(str(report.get("target_label", "Selected checkpoint")))
+            total_episodes = escape(str(int(report.get("total_episodes", 0))))
+            recorded_episodes = escape(str(int(report.get("recorded_episode_count", 0))))
+            rows.append(
+                "<tr>"
+                f"<td>{label}</td>"
+                f"<td>{total_episodes}</td>"
+                f"<td>{recorded_episodes}</td>"
+                "</tr>"
+            )
+        return (
+            "<table cellspacing='0' cellpadding='6' width='100%'>"
+            "<thead>"
+            f"{rows[0]}"
+            "</thead>"
+            "<tbody>"
+            f"{''.join(rows[1:])}"
+            "</tbody>"
+            "</table>"
+        )
+
+    def _chart_series(self) -> list[dict[str, object]]:
+        series: list[dict[str, object]] = []
+        for index, report in enumerate(self.reports, start=1):
+            label = str(report.get("target_label") or report.get("target_checkpoint_id") or f"Checkpoint {index}")
+            series.append(
+                {
+                    "label": label,
+                    "points": list(report.get("cumulative_reward_points", [])),
+                    "task_switches": list(report.get("task_switches", [])),
+                    "total_episodes": int(report.get("total_episodes", 0)),
+                }
+            )
+        return series
 
 
 def _q_values_from_checkpoint(checkpoint: Checkpoint) -> dict[tuple[str, int], float]:
@@ -919,7 +1080,7 @@ class CheckpointHistoryView(QWidget):
         self.export_curriculum_plan_button.setEnabled(False)
         self.show_training_report_button = QPushButton("Show Training Report", right_panel)
         self.show_training_report_button.setToolTip(
-            "Show aggregate training information from the lineage start to the selected checkpoint."
+            "Show aggregate training information from the lineage start to the selected checkpoint(s)."
         )
         self.show_training_report_button.setEnabled(False)
         self.export_checkpoint_button = QPushButton("Export Checkpoint", right_panel)
@@ -1352,18 +1513,29 @@ class CheckpointHistoryView(QWidget):
         return _QTableDialog(checkpoint, self)
 
     def _show_training_report_for_selected_checkpoint(self) -> None:
-        checkpoint = self._selected_export_checkpoint()
-        if checkpoint is None:
+        checkpoints = self._selected_training_report_checkpoints()
+        if not checkpoints:
             QMessageBox.warning(
                 self,
                 "Training Report",
-                "Select a checkpoint before showing a training report.",
+                "Select one or more checkpoints before showing a training report.",
             )
             return
-        self._build_training_report_dialog(checkpoint).exec()
+        self._build_training_report_dialog(checkpoints).exec()
 
-    def _build_training_report_dialog(self, checkpoint: Checkpoint) -> _TrainingReportDialog:
-        return _TrainingReportDialog(self._training_report_payload(checkpoint), self)
+    def _build_training_report_dialog(
+        self,
+        checkpoint_or_checkpoints: Checkpoint | list[Checkpoint] | tuple[Checkpoint, ...],
+    ) -> _TrainingReportDialog:
+        if isinstance(checkpoint_or_checkpoints, Checkpoint):
+            checkpoints = [checkpoint_or_checkpoints]
+        else:
+            checkpoints = list(checkpoint_or_checkpoints)
+
+        reports = [self._training_report_payload(checkpoint) for checkpoint in checkpoints]
+        if len(reports) == 1:
+            return _TrainingReportDialog(reports[0], self)
+        return _TrainingReportDialog({"reports": reports}, self)
 
     def _export_selected_curriculum(self, *, include_episode_traces: bool) -> None:
         checkpoint = self._selected_export_checkpoint()
@@ -1558,6 +1730,24 @@ class CheckpointHistoryView(QWidget):
             if edge is not None:
                 return edge.target_checkpoint
         return self.selected_checkpoint()
+
+    def _selected_training_report_checkpoints(self) -> list[Checkpoint]:
+        selected_edge_id = self.graph_widget.selected_edge_id
+        if selected_edge_id is not None:
+            edge = self.graph_widget.edge_for_id(selected_edge_id)
+            if edge is not None:
+                return [edge.target_checkpoint]
+
+        selected_checkpoints = [
+            node.checkpoint
+            for node in self.graph_widget.selected_nodes()
+            if node.checkpoint is not None
+        ]
+        if selected_checkpoints:
+            return selected_checkpoints
+
+        checkpoint = self.selected_checkpoint()
+        return [] if checkpoint is None else [checkpoint]
 
     def _checkpoint_export_payload(self, checkpoint: Checkpoint) -> dict[str, object]:
         return checkpoint.to_dict()
