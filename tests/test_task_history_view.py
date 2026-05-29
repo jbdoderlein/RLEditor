@@ -93,3 +93,14 @@ def test_task_history_view_emits_edit_and_copy_requests() -> None:
 
     assert edited == [1]
     assert copied == [1]
+
+
+def test_task_history_view_emits_import_request() -> None:
+    _app()
+    view = TaskHistoryView()
+    emitted: list[bool] = []
+    view.import_task_requested.connect(lambda: emitted.append(True))
+
+    view.import_task_button.click()
+
+    assert emitted == [True]

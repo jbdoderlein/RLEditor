@@ -334,6 +334,92 @@ def test_task_history_copy_duplicates_selected_task() -> None:
     assert copied_task.parent_task_id == "task_main"
 
 
+def test_task_import_from_generated_curriculum_adds_workspace_task_without_training() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+    )
+    payload = {
+        "curriculum": {
+            "steps": [{"env_id": "0", "algorithm": "q_learning"}],
+        },
+        "environments": [
+            {
+                "environment_id": "dummy_env",
+                "task_id": 0,
+                "task_name": "Generated Eval Task",
+                "task_config": {"difficulty": 4},
+                "reward_config": {"goal": 2.0},
+                "termination_config": {"max_steps": 33},
+            }
+        ],
+    }
+
+    imported_count, selected_index = window._import_tasks_from_payload(payload)
+
+    assert imported_count == 1
+    assert selected_index == 1
+    assert len(window._task_workspace) == 2
+    imported_task = window._task_workspace[1]
+    assert imported_task.name == "Generated Eval Task"
+    assert imported_task.task_id is None
+    assert imported_task.config == {"difficulty": 4}
+    assert imported_task.reward_config == {"goal": 2.0}
+    assert imported_task.termination_config == {"max_steps": 33}
+    assert window.task_history_view.selected_task() is imported_task
+    assert window.evaluation_view.selected_task().name == "Generated Eval Task"
+    assert training_service.status == TrainingStatus.IDLE
+
+
+def test_task_import_reuses_existing_matching_workspace_task() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+    )
+    existing_task = window._task_workspace[0]
+    payload = {
+        "environment_id": "dummy_env",
+        "name": existing_task.name,
+        "config": dict(existing_task.config),
+        "reward_config": dict(existing_task.reward_config),
+        "termination_config": dict(existing_task.termination_config),
+    }
+
+    imported_count, selected_index = window._import_tasks_from_payload(payload)
+
+    assert imported_count == 0
+    assert selected_index == 0
+    assert window._task_workspace == [existing_task]
+    assert window.task_history_view.selected_task() is existing_task
+
+
 def test_curriculum_import_adds_tasks_and_starts_first_step() -> None:
     _app()
     registry = PluginRegistry()
@@ -373,6 +459,7 @@ def test_curriculum_import_adds_tasks_and_starts_first_step() -> None:
                     "env_id": 1,
                     "steps": 50,
                     "algorithm": "q_learning",
+                    "episode_trace_sample_rate": 0.0,
                 },
             ],
         },
@@ -422,16 +509,140 @@ def test_curriculum_import_adds_tasks_and_starts_first_step() -> None:
     assert config.gamma == 0.95
     assert config.epsilon == 1.0
     assert config.hyperparameters["epsilon"] == 1.0
+    assert config.episode_trace_sample_rate == 1.0
     assert config.evaluation_policy["episode_count"] == 5
     assert config.evaluation_policy["seed"] == 7
     assert captured["kwargs"]["start_from_scratch"] is True
     assert len(window._imported_curriculum_queue) == 1
     queued_task, queued_config = window._imported_curriculum_queue[0]
     assert queued_task is window._task_workspace[-1]
+    assert queued_config.max_steps_per_episode == 100
     assert queued_config.epsilon == 1.0
     assert queued_config.hyperparameters["epsilon"] == 1.0
+    assert queued_config.episode_trace_sample_rate == 1.0
     assert queued_config.evaluation_policy["episode_count"] == 5
     assert queued_config.evaluation_policy["seed"] == 7
+
+
+def test_curriculum_import_without_evaluation_uses_final_step_as_default_eval_task() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+    )
+    window.evaluation_view.episode_count_spin.setValue(4)
+    window.evaluation_view.max_steps_per_episode_spin.setValue(77)
+    window.evaluation_view.seed_spin.setValue(314)
+    payload = {
+        "curriculum": {
+            "steps": [
+                {"env_id": "easy", "algorithm": "q_learning"},
+                {"env_id": "target", "algorithm": "q_learning"},
+            ],
+        },
+        "environments": [
+            {
+                "task_id": "easy",
+                "environment_id": "dummy_env",
+                "task_name": "Easy Step",
+                "task_config": {"difficulty": 1},
+            },
+            {
+                "task_id": "target",
+                "environment_id": "dummy_env",
+                "task_name": "Target Step",
+                "task_config": {"difficulty": 2},
+            },
+        ],
+    }
+    captured: dict[str, object] = {}
+
+    def _capture_start(task, config, **kwargs):
+        captured["task"] = task
+        captured["config"] = config
+        captured["kwargs"] = kwargs
+
+    training_service.start = _capture_start  # type: ignore[method-assign]
+
+    window._on_curriculum_import_requested(payload)
+
+    assert isinstance(captured["config"], RunConfig)
+    config = captured["config"]
+    assert config.evaluation_policy["task"]["name"] == "Target Step"
+    assert config.evaluation_policy["episode_count"] == 4
+    assert config.evaluation_policy["max_steps_per_episode"] == 77
+    assert config.evaluation_policy["seed"] == 314
+    _queued_task, queued_config = window._imported_curriculum_queue[0]
+    assert queued_config.evaluation_policy["task"]["name"] == "Target Step"
+
+
+def test_curriculum_import_records_all_training_episodes_by_default() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="tiny_env",
+            display_name="Tiny",
+            description="Tiny curriculum trace plugin",
+            backend=_TinyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="tiny_env",
+    )
+    payload = {
+        "curriculum": {
+            "steps": [
+                {
+                    "env_id": 0,
+                    "algorithm": "q_learning",
+                    "max_episodes": 2,
+                    "max_episode_length": 5,
+                    "episode_trace_sample_rate": 0.0,
+                }
+            ],
+        },
+        "evaluation": False,
+        "environments": [
+            {
+                "task_id": 0,
+                "environment_id": "tiny_env",
+                "task_name": "Imported Tiny Trace Task",
+            }
+        ],
+    }
+
+    window._on_curriculum_import_requested(payload)
+
+    _wait_for(
+        lambda: training_service.status == TrainingStatus.FINISHED
+        and window._imported_curriculum_active is False,
+        timeout_seconds=2.0,
+    )
+
+    snapshot = training_service.history_snapshot()
+    assert len(snapshot.runs) == 1
+    training_run_id = snapshot.runs[0].run_id
+    assert len(snapshot.episodes_by_run[training_run_id]) == 2
+    assert all(trace.steps for trace in snapshot.episodes_by_run[training_run_id])
 
 
 def test_curriculum_import_reuses_matching_workspace_task() -> None:
@@ -747,6 +958,190 @@ def test_checkpoint_history_edge_selection_applies_config_to_training_tab() -> N
         and payload["max_episodes"] == 24
         for event, payload in interaction_logger.records
     )
+
+
+def test_checkpoint_history_live_edit_replays_deepest_descendant_branch() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="tiny_env",
+            display_name="Tiny",
+            description="Tiny live edit plugin",
+            backend=_TinyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    interaction_logger = _FakeInteractionLogger()
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="tiny_env",
+        interaction_logger=interaction_logger,  # type: ignore[arg-type]
+    )
+    task_snapshot = TaskSnapshot(
+        environment_id="tiny_env",
+        task_name="Tiny Task",
+        task_id="task_tiny",
+    )
+    source_config = RunConfig(algorithm="q_learning", max_episodes=1, max_steps_per_episode=5)
+    selected_config = RunConfig(algorithm="q_learning", max_episodes=1, max_steps_per_episode=5)
+    child_config = RunConfig(algorithm="q_learning", max_episodes=1, max_steps_per_episode=5)
+    runs = [
+        TrainingRun(
+            run_id="run_001",
+            task_id="task_tiny",
+            status=TrainingStatus.FINISHED,
+            metadata={"algorithm": "q_learning", "run_config": source_config.to_dict()},
+        ),
+        TrainingRun(
+            run_id="run_002",
+            task_id="task_tiny",
+            status=TrainingStatus.FINISHED,
+            parent_checkpoint_id="checkpoint_001",
+            metadata={"algorithm": "q_learning", "run_config": selected_config.to_dict()},
+        ),
+        TrainingRun(
+            run_id="run_003",
+            task_id="task_tiny",
+            status=TrainingStatus.FINISHED,
+            parent_checkpoint_id="checkpoint_002",
+            metadata={"algorithm": "q_learning", "run_config": child_config.to_dict()},
+        ),
+        TrainingRun(
+            run_id="run_004",
+            task_id="task_tiny",
+            status=TrainingStatus.FINISHED,
+            parent_checkpoint_id="checkpoint_002",
+            metadata={"algorithm": "q_learning", "run_config": child_config.to_dict()},
+        ),
+        TrainingRun(
+            run_id="run_005",
+            task_id="task_tiny",
+            status=TrainingStatus.FINISHED,
+            parent_checkpoint_id="checkpoint_003",
+            metadata={"algorithm": "q_learning", "run_config": child_config.to_dict()},
+        ),
+    ]
+    learner_state = {"algorithm": "q_learning", "q_values": []}
+    checkpoints = [
+        Checkpoint(
+            checkpoint_id="checkpoint_001",
+            label="Checkpoint 001",
+            created_at="2026-05-17 09:00:00",
+            reason="run_finished",
+            run_id="run_001",
+            task_id="task_tiny",
+            task_name="Tiny Task",
+            step=2,
+            episode=1,
+            task_snapshot=task_snapshot,
+            metadata={"algorithm": "q_learning", "learner_state": learner_state},
+        ),
+        Checkpoint(
+            checkpoint_id="checkpoint_002",
+            label="Checkpoint 002",
+            created_at="2026-05-17 09:01:00",
+            reason="run_finished",
+            parent_checkpoint_id="checkpoint_001",
+            run_id="run_002",
+            task_id="task_tiny",
+            task_name="Tiny Task",
+            step=2,
+            episode=1,
+            task_snapshot=task_snapshot,
+            metadata={"algorithm": "q_learning", "learner_state": learner_state},
+        ),
+        Checkpoint(
+            checkpoint_id="checkpoint_003",
+            label="Checkpoint 003",
+            created_at="2026-05-17 09:02:00",
+            reason="run_finished",
+            parent_checkpoint_id="checkpoint_002",
+            run_id="run_003",
+            task_id="task_tiny",
+            task_name="Tiny Task",
+            step=2,
+            episode=1,
+            task_snapshot=task_snapshot,
+            metadata={"algorithm": "q_learning", "learner_state": learner_state},
+        ),
+        Checkpoint(
+            checkpoint_id="checkpoint_004",
+            label="Checkpoint 004",
+            created_at="2026-05-17 09:03:00",
+            reason="run_finished",
+            parent_checkpoint_id="checkpoint_002",
+            run_id="run_004",
+            task_id="task_tiny",
+            task_name="Tiny Task",
+            step=2,
+            episode=1,
+            task_snapshot=task_snapshot,
+            metadata={"algorithm": "q_learning", "learner_state": learner_state},
+        ),
+        Checkpoint(
+            checkpoint_id="checkpoint_005",
+            label="Checkpoint 005",
+            created_at="2026-05-17 09:04:00",
+            reason="run_finished",
+            parent_checkpoint_id="checkpoint_003",
+            run_id="run_005",
+            task_id="task_tiny",
+            task_name="Tiny Task",
+            step=2,
+            episode=1,
+            task_snapshot=task_snapshot,
+            metadata={"algorithm": "q_learning", "learner_state": learner_state},
+        ),
+    ]
+    snapshot = TrainingHistorySnapshot(
+        runs=runs,
+        checkpoints=checkpoints,
+        episodes_by_run={},
+        run_task_snapshots={run.run_id: task_snapshot for run in runs},
+    )
+    training_service.load_history(snapshot)
+    window.history_view.set_history(training_service.history_snapshot(deep=False))
+    edge = window.history_view.graph_widget.edge_for_id("edge:checkpoint_002")
+    assert edge is not None
+
+    edited_config = RunConfig(
+        algorithm="q_learning",
+        max_episodes=1,
+        max_steps_per_episode=5,
+        learning_rate=0.22,
+        gamma=0.91,
+    )
+    window._on_training_edge_live_edit_requested(edge, edited_config)
+
+    _wait_for(lambda: not window._live_edit_active, timeout_seconds=2.0)
+
+    replay_snapshot = training_service.history_snapshot()
+    new_checkpoints = replay_snapshot.checkpoints[5:]
+    assert len(new_checkpoints) == 3
+    assert new_checkpoints[0].parent_checkpoint_id == "checkpoint_001"
+    assert new_checkpoints[1].parent_checkpoint_id == new_checkpoints[0].checkpoint_id
+    assert new_checkpoints[2].parent_checkpoint_id == new_checkpoints[1].checkpoint_id
+
+    replay_run_configs = [
+        run.metadata["run_config"]
+        for run in replay_snapshot.runs[5:]
+    ]
+    assert [config["metadata"]["live_edit_role"] for config in replay_run_configs] == [
+        "edited_edge",
+        "replayed_descendant_edge",
+        "replayed_descendant_edge",
+    ]
+    assert [config["metadata"]["live_edit_original_target_checkpoint_id"] for config in replay_run_configs] == [
+        "checkpoint_002",
+        "checkpoint_003",
+        "checkpoint_005",
+    ]
+    assert replay_run_configs[0]["learning_rate"] == pytest.approx(0.22)
+    assert any(event == "live_edit_replay_completed" for event, _payload in interaction_logger.records)
 
 
 def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() -> None:

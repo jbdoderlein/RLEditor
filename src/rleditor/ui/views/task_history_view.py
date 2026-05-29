@@ -29,6 +29,7 @@ _WORKSPACE_INDEX_ROLE = int(Qt.ItemDataRole.UserRole)
 class TaskHistoryView(QWidget):
     selection_changed = Signal(object, object)
     create_task_requested = Signal()
+    import_task_requested = Signal()
     edit_task_requested = Signal(int)
     copy_task_requested = Signal(int)
 
@@ -41,12 +42,16 @@ class TaskHistoryView(QWidget):
 
         title = QLabel("Task History")
         title.setObjectName("TitleLabel")
+        self.import_task_button = QPushButton("Import Task", self)
+        self.import_task_button.setToolTip("Import a task JSON or a generated curriculum task file.")
+        self.import_task_button.clicked.connect(self.import_task_requested.emit)
         add_task_button = QPushButton("Add New Task", self)
         add_task_button.clicked.connect(self.create_task_requested.emit)
 
         title_row = QHBoxLayout()
         title_row.addWidget(title)
         title_row.addStretch(1)
+        title_row.addWidget(self.import_task_button)
         title_row.addWidget(add_task_button)
 
         subtitle = QLabel(

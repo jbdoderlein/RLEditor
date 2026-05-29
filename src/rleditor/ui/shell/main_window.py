@@ -3,13 +3,16 @@ from __future__ import annotations
 from collections import deque
 from copy import deepcopy
 import json
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QFrame,
+    QFileDialog,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -26,7 +29,9 @@ from rleditor.core.models import (
     RunConfig,
     TaskDefinition,
     TaskDerivationOptions,
+    TaskSnapshot,
     TrainingMetrics,
+    TrainingRun,
     TrainingStatus,
 )
 from rleditor.plugins.base import EnvironmentPlugin
@@ -38,6 +43,9 @@ from rleditor.ui.interaction_logging import InteractionLogger
 from rleditor.ui.views.task_editor_view import TaskEditorView
 from rleditor.ui.views.task_history_view import TaskHistoryView
 from rleditor.ui.views.training_monitor_view import TrainingMonitorView
+
+
+DEFAULT_MAX_STEPS_PER_EPISODE = 100
 
 
 class MainWindow(QMainWindow):
@@ -67,6 +75,12 @@ class MainWindow(QMainWindow):
         self._imported_curriculum_waiting_for_step = False
         self._imported_curriculum_checkpoint_stop_pending = False
         self._imported_curriculum_completed_steps = 0
+        self._live_edit_queue: deque[tuple[TaskDefinition, RunConfig]] = deque()
+        self._live_edit_active = False
+        self._live_edit_waiting_for_step = False
+        self._live_edit_checkpoint_stop_pending = False
+        self._live_edit_completed_steps = 0
+        self._live_edit_initial_checkpoint: Checkpoint | None = None
         self._status_busy_sources: set[str] = set()
         self._status_busy_frames = ("|", "/", "-", "\\")
         self._status_busy_frame_index = 0
@@ -137,8 +151,10 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         self.task_history_view.selection_changed.connect(self._on_task_history_selection_changed)
         self.task_history_view.create_task_requested.connect(self._create_new_task)
+        self.task_history_view.import_task_requested.connect(self._on_task_import_requested)
         self.task_history_view.edit_task_requested.connect(self._edit_task_from_history)
         self.task_history_view.copy_task_requested.connect(self._copy_task_from_history)
+        self.evaluation_view.import_task_requested.connect(self._on_task_import_requested)
         self.task_editor_view.task_changed.connect(self._on_task_changed)
         self.episode_view.create_task_from_moment_requested.connect(self._on_derive_task_from_episode_moment)
         self.history_view.inspect_episode_requested.connect(self._inspect_episode_from_history)
@@ -146,6 +162,7 @@ class MainWindow(QMainWindow):
         self.history_view.checkpoint_evaluation_requested.connect(self._on_checkpoint_evaluation_requested)
         self.history_view.curriculum_import_requested.connect(self._on_curriculum_import_requested)
         self.history_view.training_run_config_selected.connect(self._on_training_run_config_selected)
+        self.history_view.training_edge_live_edit_requested.connect(self._on_training_edge_live_edit_requested)
 
         self.training_view.start_requested.connect(self._start_training)
         self.training_view.pause_requested.connect(self._training_service.pause)
@@ -336,9 +353,224 @@ class MainWindow(QMainWindow):
             gamma=config.gamma,
         )
 
+    def _on_training_edge_live_edit_requested(self, edge: object, edited_config: RunConfig) -> None:
+        if self._training_service.status in {TrainingStatus.RUNNING, TrainingStatus.PAUSED}:
+            self.statusBar().showMessage("Cannot start live edit while training is running")
+            return
+        if self._imported_curriculum_active:
+            self.statusBar().showMessage("Cannot start live edit while a curriculum is active")
+            return
+
+        try:
+            initial_checkpoint, replay_steps = self._live_edit_replay_steps(edge, edited_config)
+        except ValueError as exc:
+            self.statusBar().showMessage(f"Cannot start live edit: {exc}")
+            return
+
+        self._live_edit_queue = deque(replay_steps)
+        self._live_edit_active = True
+        self._live_edit_waiting_for_step = False
+        self._live_edit_checkpoint_stop_pending = False
+        self._live_edit_completed_steps = 0
+        self._live_edit_initial_checkpoint = deepcopy(initial_checkpoint)
+        self.episode_view.clear_episodes()
+        self._set_status_busy("live_edit", True)
+        self._log_interaction(
+            "live_edit_replay_started",
+            original_target_checkpoint_id=getattr(
+                getattr(edge, "target_checkpoint", None),
+                "checkpoint_id",
+                None,
+            ),
+            source_checkpoint_id=None if initial_checkpoint is None else initial_checkpoint.checkpoint_id,
+            step_count=len(replay_steps),
+            algorithm=edited_config.algorithm,
+            max_episodes=edited_config.max_episodes,
+            max_steps=edited_config.max_steps,
+            max_steps_per_episode=edited_config.max_steps_per_episode,
+        )
+        self._start_next_live_edit_step()
+
+    def _live_edit_replay_steps(
+        self,
+        edge: object,
+        edited_config: RunConfig,
+    ) -> tuple[Checkpoint | None, list[tuple[TaskDefinition, RunConfig]]]:
+        target_checkpoint = getattr(edge, "target_checkpoint", None)
+        if not isinstance(target_checkpoint, Checkpoint):
+            raise ValueError("selected edge has no target checkpoint")
+        source_checkpoint = getattr(edge, "source_checkpoint", None)
+        if source_checkpoint is not None and not isinstance(source_checkpoint, Checkpoint):
+            source_checkpoint = None
+
+        task_snapshot = getattr(edge, "task_snapshot", None) or target_checkpoint.task_snapshot
+        if not isinstance(task_snapshot, TaskSnapshot):
+            raise ValueError("selected edge has no task snapshot")
+
+        original_target_id = target_checkpoint.checkpoint_id
+        replay_steps: list[tuple[TaskDefinition, RunConfig]] = [
+            (
+                self._task_from_snapshot(task_snapshot),
+                self._live_edit_config_with_metadata(
+                    edited_config,
+                    role="edited_edge",
+                    original_target_checkpoint_id=original_target_id,
+                    original_source_checkpoint_id=(
+                        None if source_checkpoint is None else source_checkpoint.checkpoint_id
+                    ),
+                ),
+            )
+        ]
+
+        snapshot = self._training_service.history_snapshot()
+        checkpoints_by_id = {
+            checkpoint.checkpoint_id: checkpoint
+            for checkpoint in snapshot.checkpoints
+        }
+        runs_by_id = {
+            run.run_id: run
+            for run in snapshot.runs
+        }
+
+        for descendant in self._deepest_descendant_path(snapshot.checkpoints, original_target_id):
+            run = runs_by_id.get(descendant.run_id or "")
+            replay_task_snapshot = (
+                snapshot.run_task_snapshots.get(descendant.run_id or "")
+                or descendant.task_snapshot
+            )
+            if replay_task_snapshot is None:
+                continue
+            parent_checkpoint = checkpoints_by_id.get(descendant.parent_checkpoint_id or "")
+            replay_config = self._run_config_for_history_checkpoint(run, descendant)
+            replay_config = self._config_limited_to_checkpoint_segment(
+                replay_config,
+                source_checkpoint=parent_checkpoint,
+                target_checkpoint=descendant,
+            )
+            replay_steps.append(
+                (
+                    self._task_from_snapshot(replay_task_snapshot),
+                    self._live_edit_config_with_metadata(
+                        replay_config,
+                        role="replayed_descendant_edge",
+                        original_target_checkpoint_id=descendant.checkpoint_id,
+                        original_source_checkpoint_id=descendant.parent_checkpoint_id,
+                    ),
+                )
+            )
+
+        return source_checkpoint, replay_steps
+
+    def _task_from_snapshot(self, snapshot: TaskSnapshot) -> TaskDefinition:
+        return TaskDefinition(
+            environment_id=snapshot.environment_id,
+            name=snapshot.task_name,
+            task_id=snapshot.task_id,
+            config=deepcopy(snapshot.task_config),
+            reward_config=deepcopy(snapshot.reward_config),
+            termination_config=deepcopy(snapshot.termination_config),
+            metadata=deepcopy(snapshot.metadata),
+        )
+
+    def _run_config_for_history_checkpoint(
+        self,
+        run: TrainingRun | None,
+        checkpoint: Checkpoint,
+    ) -> RunConfig:
+        run_config = run.metadata.get("run_config") if run is not None else None
+        if isinstance(run_config, dict):
+            return RunConfig.from_dict(run_config)
+        return RunConfig(
+            algorithm=str(checkpoint.metadata.get("algorithm", "q_learning")),
+            seed=self._optional_int(checkpoint.metadata.get("seed")),
+            max_steps=checkpoint.step if checkpoint.step > 0 else None,
+        )
+
+    def _config_limited_to_checkpoint_segment(
+        self,
+        config: RunConfig,
+        *,
+        source_checkpoint: Checkpoint | None,
+        target_checkpoint: Checkpoint,
+    ) -> RunConfig:
+        segment_config = RunConfig.from_dict(config.to_dict())
+        segment_steps = target_checkpoint.step
+        segment_episodes = target_checkpoint.episode
+        if (
+            source_checkpoint is not None
+            and source_checkpoint.run_id is not None
+            and source_checkpoint.run_id == target_checkpoint.run_id
+        ):
+            segment_steps = max(0, target_checkpoint.step - source_checkpoint.step)
+            segment_episodes = max(0, target_checkpoint.episode - source_checkpoint.episode)
+
+        if segment_episodes > 0:
+            segment_config.max_episodes = segment_episodes
+        if segment_config.max_steps is not None or segment_episodes <= 0:
+            segment_config.max_steps = segment_steps if segment_steps > 0 else segment_config.max_steps
+        return segment_config
+
+    def _live_edit_config_with_metadata(
+        self,
+        config: RunConfig,
+        *,
+        role: str,
+        original_target_checkpoint_id: str,
+        original_source_checkpoint_id: str | None,
+    ) -> RunConfig:
+        replay_config = RunConfig.from_dict(config.to_dict())
+        replay_config.metadata = dict(replay_config.metadata)
+        replay_config.metadata.update(
+            {
+                "live_edit_replay": True,
+                "live_edit_role": role,
+                "live_edit_original_target_checkpoint_id": original_target_checkpoint_id,
+                "live_edit_original_source_checkpoint_id": original_source_checkpoint_id,
+            }
+        )
+        return replay_config
+
+    def _deepest_descendant_path(
+        self,
+        checkpoints: list[Checkpoint],
+        checkpoint_id: str,
+    ) -> list[Checkpoint]:
+        checkpoints_by_parent: dict[str, list[Checkpoint]] = {}
+        order_by_checkpoint_id = {
+            checkpoint.checkpoint_id: index
+            for index, checkpoint in enumerate(checkpoints)
+        }
+        for checkpoint in checkpoints:
+            if checkpoint.parent_checkpoint_id is None:
+                continue
+            checkpoints_by_parent.setdefault(checkpoint.parent_checkpoint_id, []).append(checkpoint)
+
+        for children in checkpoints_by_parent.values():
+            children.sort(key=lambda checkpoint: order_by_checkpoint_id.get(checkpoint.checkpoint_id, -1))
+
+        def best_path_from(parent_id: str) -> list[Checkpoint]:
+            candidate_paths: list[list[Checkpoint]] = []
+            for child in checkpoints_by_parent.get(parent_id, []):
+                candidate_paths.append([child, *best_path_from(child.checkpoint_id)])
+            if not candidate_paths:
+                return []
+            return max(
+                candidate_paths,
+                key=lambda path: (
+                    len(path),
+                    max(order_by_checkpoint_id.get(checkpoint.checkpoint_id, -1) for checkpoint in path),
+                ),
+            )
+
+        return best_path_from(checkpoint_id)
+
     def _on_status_changed(self, status: TrainingStatus) -> None:
         self.training_view.set_status(status)
         self._set_status_busy("training", status == TrainingStatus.RUNNING)
+        self._handle_imported_curriculum_status(status)
+        self._handle_live_edit_status(status)
+
+    def _handle_imported_curriculum_status(self, status: TrainingStatus) -> None:
         if not self._imported_curriculum_active or not self._imported_curriculum_waiting_for_step:
             return
         if status == TrainingStatus.FINISHED:
@@ -357,6 +589,32 @@ class MainWindow(QMainWindow):
             if self._imported_curriculum_checkpoint_stop_pending:
                 self._imported_curriculum_checkpoint_stop_pending = False
                 self.statusBar().showMessage("Curriculum checkpoint reached; stopping imported run")
+                self._training_service.stop()
+
+    def _handle_live_edit_status(self, status: TrainingStatus) -> None:
+        if not self._live_edit_active or not self._live_edit_waiting_for_step:
+            return
+        if status == TrainingStatus.FINISHED:
+            self._live_edit_checkpoint_stop_pending = False
+            self._live_edit_waiting_for_step = False
+            QTimer.singleShot(0, self._start_next_live_edit_step)
+        elif status == TrainingStatus.STOPPED:
+            if self._live_edit_checkpoint_stop_pending:
+                self._live_edit_checkpoint_stop_pending = False
+                self._live_edit_waiting_for_step = False
+                QTimer.singleShot(0, self._start_next_live_edit_step)
+                return
+            self._live_edit_queue.clear()
+            self._live_edit_active = False
+            self._live_edit_waiting_for_step = False
+            self._live_edit_checkpoint_stop_pending = False
+            self._live_edit_initial_checkpoint = None
+            self._set_status_busy("live_edit", False)
+            self.statusBar().showMessage("Live edit replay stopped")
+        elif status == TrainingStatus.PAUSED:
+            self._set_status_busy("live_edit", False)
+            if self._live_edit_checkpoint_stop_pending:
+                self.statusBar().showMessage("Live edit checkpoint reached; continuing replay")
                 self._training_service.stop()
 
     def _on_metrics_updated(self, metrics: TrainingMetrics) -> None:
@@ -385,6 +643,15 @@ class MainWindow(QMainWindow):
                 self._imported_curriculum_checkpoint_stop_pending = True
             else:
                 self.statusBar().showMessage("Curriculum checkpoint reached; stopping imported run")
+                self._training_service.stop()
+        if (
+            self._live_edit_active
+            and self._live_edit_waiting_for_step
+            and "checkpoint" in actions
+        ):
+            self._live_edit_checkpoint_stop_pending = True
+            if "pause" not in actions and "stop" not in actions:
+                self.statusBar().showMessage("Live edit checkpoint reached; continuing replay")
                 self._training_service.stop()
 
     def _on_episode_captured(self, trace: EpisodeTrace) -> None:
@@ -569,6 +836,126 @@ class MainWindow(QMainWindow):
         self._add_task_to_workspace(task, select=True)
         self.statusBar().showMessage(f"Copied task: {task.name}")
 
+    def _on_task_import_requested(self) -> None:
+        selected_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Import Task",
+            self._task_import_default_directory(),
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected_path:
+            return
+
+        path = Path(selected_path).expanduser()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self._import_tasks_from_payload(payload)
+        except (OSError, TypeError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                "Import Task",
+                f"Could not import task:\n{exc}",
+            )
+
+    def _import_tasks_from_payload(self, payload: object) -> tuple[int, int | None]:
+        candidates = self._task_import_candidates_from_payload(payload)
+        if not candidates:
+            raise ValueError("No task definitions found.")
+
+        imported_count, selected_index = self._add_imported_task_candidates(candidates)
+        self._refresh_task_history_view(
+            selected_workspace_index=selected_index,
+            preserve_multi_selection=False,
+        )
+        if selected_index is not None:
+            self._select_task_index(
+                selected_index,
+                sync_task_history=True,
+                preserve_graph_multi_selection=False,
+            )
+            self.evaluation_view.set_selected_task_index(selected_index)
+
+        if imported_count > 0:
+            self.statusBar().showMessage(f"Imported {imported_count} task(s)")
+        else:
+            self.statusBar().showMessage("Imported task already exists in workspace")
+        self._log_interaction(
+            "task_imported",
+            imported_count=imported_count,
+            selected_workspace_index=selected_index,
+        )
+        return imported_count, selected_index
+
+    def _task_import_default_directory(self) -> str:
+        curricula_dir = Path("eval/curricula")
+        if curricula_dir.exists():
+            return str(curricula_dir.resolve())
+        return ""
+
+    def _task_import_candidates_from_payload(self, payload: object) -> list[TaskDefinition]:
+        if not isinstance(payload, dict):
+            raise ValueError("Task import must be a JSON object.")
+
+        environments = payload.get("environments")
+        if isinstance(environments, list):
+            tasks: list[TaskDefinition] = []
+            for index, raw_environment in enumerate(environments):
+                if not isinstance(raw_environment, dict):
+                    raise ValueError(f"Environment entry {index + 1} must be an object.")
+                tasks.append(self._task_from_import_payload(raw_environment))
+            return tasks
+
+        tasks_payload = payload.get("tasks")
+        if isinstance(tasks_payload, list):
+            tasks = []
+            for index, raw_task in enumerate(tasks_payload):
+                if not isinstance(raw_task, dict):
+                    raise ValueError(f"Task entry {index + 1} must be an object.")
+                tasks.append(self._task_from_import_payload(raw_task))
+            return tasks
+
+        task_payload = payload.get("task")
+        if isinstance(task_payload, dict):
+            return [self._task_from_import_payload(task_payload)]
+
+        task_snapshot_payload = payload.get("task_snapshot")
+        if isinstance(task_snapshot_payload, dict):
+            return [self._task_from_import_payload(task_snapshot_payload)]
+
+        if "environment_id" in payload:
+            return [self._task_from_import_payload(payload)]
+
+        raise ValueError(
+            "Task file must contain a task object, task_snapshot, tasks list, or curriculum environments."
+        )
+
+    def _add_imported_task_candidates(self, candidates: list[TaskDefinition]) -> tuple[int, int | None]:
+        existing_names = {task.name for task in self._task_workspace}
+        tasks_by_reuse_key = {
+            self._curriculum_task_reuse_key(task): task
+            for task in self._task_workspace
+        }
+        imported_count = 0
+        selected_index: int | None = None
+
+        for task in candidates:
+            task_reuse_key = self._curriculum_task_reuse_key(task)
+            reusable_task = tasks_by_reuse_key.get(task_reuse_key)
+            if reusable_task is not None:
+                if selected_index is None:
+                    selected_index = self._workspace_index_for_task(reusable_task)
+                continue
+
+            task.name = self._unique_task_name_from_set(task.name, existing_names)
+            existing_names.add(task.name)
+            self._task_workspace.append(task)
+            tasks_by_reuse_key[task_reuse_key] = task
+            imported_count += 1
+            if selected_index is None:
+                selected_index = len(self._task_workspace) - 1
+
+        return imported_count, selected_index
+
     def _curriculum_from_import_payload(
         self,
         payload: object,
@@ -649,10 +1036,20 @@ class MainWindow(QMainWindow):
         )
 
     def _task_from_curriculum_environment(self, payload: dict[str, Any]) -> TaskDefinition:
+        return self._task_from_import_payload(
+            payload,
+            curriculum_env_id=payload.get("task_id"),
+        )
+
+    def _task_from_import_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        curriculum_env_id: object | None = None,
+    ) -> TaskDefinition:
         metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
-        raw_task_id = payload.get("task_id")
-        if raw_task_id is not None:
-            metadata.setdefault("curriculum_env_id", raw_task_id)
+        if curriculum_env_id is not None:
+            metadata.setdefault("curriculum_env_id", curriculum_env_id)
         task_kwargs = {
             "environment_id": str(payload.get("environment_id", "")),
             "name": str(payload.get("task_name", payload.get("name", "Imported Task"))),
@@ -707,11 +1104,12 @@ class MainWindow(QMainWindow):
                 {
                     "algorithm": self._normalize_curriculum_algorithm(step.get("algorithm", "q_learning")),
                     "seed": self._optional_int(step.get("seed"), fallback=fallback_seed),
-                    "episode_trace_sample_rate": float(step.get("episode_trace_sample_rate", 0.0)),
+                    "episode_trace_sample_rate": 1.0,
                     "max_steps": self._optional_int(step.get("steps", step.get("max_steps"))),
                     "max_episodes": self._optional_int(step.get("max_episodes")),
                     "max_steps_per_episode": self._optional_int(
-                        step.get("max_episode_length", step.get("max_steps_per_episode"))
+                        step.get("max_episode_length", step.get("max_steps_per_episode")),
+                        fallback=DEFAULT_MAX_STEPS_PER_EPISODE,
                     ),
                     "max_duration_seconds": step.get("max_duration_seconds"),
                     "learning_rate": float(step.get("learning_rate", step.get("lr", 0.1))),
@@ -721,6 +1119,7 @@ class MainWindow(QMainWindow):
                     "breakpoints": step.get("breakpoints", []),
                 }
             )
+        config.episode_trace_sample_rate = 1.0
         config.algorithm = self._normalize_curriculum_algorithm(config.algorithm)
         if config.algorithm == "q_learning":
             config.epsilon = 1.0
@@ -741,8 +1140,15 @@ class MainWindow(QMainWindow):
         payload: dict[str, Any],
         tasks_by_ref: dict[str, TaskDefinition],
     ) -> dict[str, object]:
-        evaluation = payload.get("evaluation")
+        missing = object()
+        evaluation = payload.get("evaluation", missing)
+        if evaluation is missing:
+            return self._default_evaluation_policy_for_imported_curriculum(payload, tasks_by_ref)
+        if evaluation is None or evaluation is False:
+            return {}
         if not isinstance(evaluation, dict):
+            return {}
+        if evaluation.get("enabled") is False:
             return {}
         env_ref = evaluation.get("evaluation_env", evaluation.get("evaluation_env_id"))
         task = tasks_by_ref.get(str(env_ref))
@@ -758,6 +1164,36 @@ class MainWindow(QMainWindow):
                 evaluation.get("max_episode_length", evaluation.get("max_steps_per_episode"))
             ),
             "seed": self._optional_int(evaluation.get("eval_seed", evaluation.get("seed"))),
+            "trace_sample_rate": 1.0,
+        }
+
+    def _default_evaluation_policy_for_imported_curriculum(
+        self,
+        payload: dict[str, Any],
+        tasks_by_ref: dict[str, TaskDefinition],
+    ) -> dict[str, object]:
+        curriculum = payload.get("curriculum")
+        if not isinstance(curriculum, dict):
+            return {}
+        raw_steps = curriculum.get("steps")
+        if not isinstance(raw_steps, list) or not raw_steps:
+            return {}
+        last_step = raw_steps[-1]
+        if not isinstance(last_step, dict):
+            return {}
+
+        env_ref = last_step.get("env_id", last_step.get("environment_id"))
+        task = tasks_by_ref.get(str(env_ref))
+        if task is None:
+            return {}
+
+        max_steps = self.evaluation_view.max_steps_per_episode_spin.value()
+        seed = self.evaluation_view.seed_spin.value()
+        return {
+            "task": task.to_dict(),
+            "episode_count": self.evaluation_view.episode_count_spin.value(),
+            "max_steps_per_episode": max_steps if max_steps > 0 else None,
+            "seed": seed if seed >= 0 else None,
             "trace_sample_rate": 1.0,
         }
 
@@ -805,6 +1241,53 @@ class MainWindow(QMainWindow):
             )
         self.statusBar().showMessage(
             f"Curriculum step {step_number} started on task: {task.name}"
+        )
+
+    def _start_next_live_edit_step(self) -> None:
+        if not self._live_edit_active:
+            return
+        if not self._live_edit_queue:
+            completed = self._live_edit_completed_steps
+            self._live_edit_active = False
+            self._live_edit_waiting_for_step = False
+            self._live_edit_checkpoint_stop_pending = False
+            self._live_edit_initial_checkpoint = None
+            self._set_status_busy("live_edit", False)
+            self.statusBar().showMessage(f"Live edit replay completed: {completed} step(s)")
+            self._log_interaction("live_edit_replay_completed", step_count=completed)
+            return
+
+        task, config = self._live_edit_queue.popleft()
+        step_number = self._live_edit_completed_steps + 1
+        if step_number == 1:
+            initial_checkpoint = self._live_edit_initial_checkpoint
+            start_from_scratch = initial_checkpoint is None
+        else:
+            initial_checkpoint = self._latest_checkpoint()
+            start_from_scratch = False
+
+        self._live_edit_waiting_for_step = True
+        try:
+            self._training_service.start(
+                task,
+                config,
+                initial_checkpoint=initial_checkpoint,
+                start_from_scratch=start_from_scratch,
+                run_in_background=True,
+            )
+        except RuntimeError as exc:
+            self._live_edit_queue.clear()
+            self._live_edit_active = False
+            self._live_edit_waiting_for_step = False
+            self._live_edit_checkpoint_stop_pending = False
+            self._live_edit_initial_checkpoint = None
+            self._set_status_busy("live_edit", False)
+            self.statusBar().showMessage(f"Live edit replay failed: {exc}")
+            return
+
+        self._live_edit_completed_steps = step_number
+        self.statusBar().showMessage(
+            f"Live edit replay step {step_number} started on task: {task.name}"
         )
 
     def _set_status_busy(self, source: str, busy: bool) -> None:

@@ -52,3 +52,14 @@ def test_evaluation_view_defaults_to_100_steps_per_episode() -> None:
     view.set_tasks([task])
 
     assert view.build_evaluation_policy()["max_steps_per_episode"] == 100
+
+
+def test_evaluation_view_import_task_button_emits_request() -> None:
+    _app()
+    view = EvaluationView()
+    emitted: list[bool] = []
+    view.import_task_requested.connect(lambda: emitted.append(True))
+
+    view.import_task_button.click()
+
+    assert emitted == [True]

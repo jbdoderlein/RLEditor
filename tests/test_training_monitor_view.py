@@ -212,6 +212,32 @@ def test_training_monitor_adds_axes_to_episode_length_and_cumulative_reward() ->
     assert view._metric_cards["success_rate"].sparkline._show_axes is False
 
 
+def test_training_monitor_axis_sparklines_use_episode_numbers() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    for index in range(251):
+        view.set_metrics(
+            TrainingMetrics(
+                step=index * 10,
+                episode=index * 40,
+                cumulative_reward=float(index),
+                episode_reward_mean=0.0,
+                success_rate=0.0,
+                episode_length_mean=50.0,
+                fps=60.0,
+            )
+        )
+
+    cumulative_sparkline = view._metric_cards["cumulative_reward"].sparkline
+    length_sparkline = view._metric_cards["episode_length_mean"].sparkline
+    reward_sparkline = view._metric_cards["episode_reward_mean"].sparkline
+
+    assert cumulative_sparkline._x_values[-1] == pytest.approx(10_000.0)
+    assert length_sparkline._x_values[-1] == pytest.approx(10_000.0)
+    assert reward_sparkline._x_values[-1] == pytest.approx(250.0)
+
+
 def test_training_monitor_splits_live_scalars_by_run() -> None:
     _app()
     view = TrainingMonitorView()

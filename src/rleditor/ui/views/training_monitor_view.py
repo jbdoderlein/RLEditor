@@ -76,6 +76,12 @@ def _format_axis_value(value: float) -> str:
     return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
+def _format_x_axis_value(value: float) -> str:
+    if abs(value - round(value)) < 1e-9:
+        return str(int(round(value)))
+    return _format_axis_value(value)
+
+
 class SparklineWidget(QWidget):
     def __init__(
         self,
@@ -85,17 +91,22 @@ class SparklineWidget(QWidget):
     ) -> None:
         super().__init__()
         self._values: list[float] = []
+        self._x_values: list[float] = []
         self._color = QColor(color)
         self._show_axes = show_axes
         self.setMinimumHeight(56)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    def add_point(self, value: float) -> None:
+    def add_point(self, value: float, *, x_value: float | None = None) -> None:
+        if x_value is None:
+            x_value = float(len(self._values))
         self._values.append(float(value))
+        self._x_values.append(float(x_value))
         self.update()
 
     def clear(self) -> None:
         self._values.clear()
+        self._x_values.clear()
         self.update()
 
     def paintEvent(self, _event) -> None:  # type: ignore[override]
@@ -115,7 +126,8 @@ class SparklineWidget(QWidget):
                     plot_rect=plot_rect,
                     min_value=value,
                     max_value=value,
-                    count=len(self._values),
+                    min_x=0.0,
+                    max_x=self._axis_max_x(),
                 )
             painter.setPen(QPen(QColor("#d0d7e4"), 1, Qt.PenStyle.DashLine))
             painter.drawLine(plot_rect.left(), plot_rect.center().y(), plot_rect.right(), plot_rect.center().y())
@@ -131,15 +143,18 @@ class SparklineWidget(QWidget):
                 plot_rect=plot_rect,
                 min_value=min_value,
                 max_value=max_value,
-                count=len(self._values),
+                min_x=0.0,
+                max_x=self._axis_max_x(),
             )
 
         points: list[tuple[float, float]] = []
         width = max(1, plot_rect.width())
         height = max(1, plot_rect.height())
-        count = len(self._values)
-        for idx, value in enumerate(self._values):
-            x = plot_rect.left() + (idx / (count - 1)) * width
+        x_min = 0.0 if self._show_axes else min(self._x_values)
+        x_max = self._axis_max_x() if self._show_axes else max(self._x_values)
+        x_span = max(x_max - x_min, 1e-6)
+        for value, x_value in zip(self._values, self._x_values):
+            x = plot_rect.left() + ((x_value - x_min) / x_span) * width
             y_ratio = (value - min_value) / span
             y = plot_rect.bottom() - y_ratio * height
             points.append((x, y))
@@ -161,7 +176,8 @@ class SparklineWidget(QWidget):
         plot_rect,
         min_value: float | None,
         max_value: float | None,
-        count: int,
+        min_x: float,
+        max_x: float,
     ) -> None:
         painter.setPen(QPen(QColor("#94a3b8"), 1.0))
         painter.drawLine(plot_rect.left(), plot_rect.top(), plot_rect.left(), plot_rect.bottom())
@@ -178,14 +194,20 @@ class SparklineWidget(QWidget):
         if min_value is not None and max_value is not None:
             painter.drawText(rect.left(), plot_rect.top() + metrics.ascent(), _format_axis_value(max_value))
             painter.drawText(rect.left(), plot_rect.bottom(), _format_axis_value(min_value))
-        if count > 1:
-            end_label = str(count - 1)
-            painter.drawText(plot_rect.left(), rect.bottom(), "0")
+        if max_x > min_x:
+            start_label = _format_x_axis_value(min_x)
+            end_label = _format_x_axis_value(max_x)
+            painter.drawText(plot_rect.left(), rect.bottom(), start_label)
             painter.drawText(
                 plot_rect.right() - metrics.horizontalAdvance(end_label),
                 rect.bottom(),
                 end_label,
             )
+
+    def _axis_max_x(self) -> float:
+        if not self._x_values:
+            return 0.0
+        return max(0.0, max(self._x_values))
 
 
 class MetricCard(QFrame):
@@ -216,8 +238,8 @@ class MetricCard(QFrame):
     def set_value_text(self, text: str) -> None:
         self.value_label.setText(text)
 
-    def add_point(self, value: float) -> None:
-        self.sparkline.add_point(value)
+    def add_point(self, value: float, *, x_value: float | None = None) -> None:
+        self.sparkline.add_point(value, x_value=x_value)
 
     def clear(self) -> None:
         self.value_label.setText("--")
@@ -256,22 +278,23 @@ class RunMetricPanel(QGroupBox):
             self.metric_cards[key] = card
 
     def set_metrics(self, metrics: TrainingMetrics) -> None:
-        self._update_metric_card("episode_reward_mean", metrics.episode_reward_mean)
-        self._update_metric_card("success_rate", metrics.success_rate)
-        self._update_metric_card("episode_length_mean", metrics.episode_length_mean)
-        self._update_metric_card("cumulative_reward", metrics.cumulative_reward)
-        self._update_metric_card("value_loss", metrics.value_loss)
-        self._update_metric_card("fps", metrics.fps)
+        self._update_metric_card("episode_reward_mean", metrics.episode_reward_mean, metrics)
+        self._update_metric_card("success_rate", metrics.success_rate, metrics)
+        self._update_metric_card("episode_length_mean", metrics.episode_length_mean, metrics)
+        self._update_metric_card("cumulative_reward", metrics.cumulative_reward, metrics)
+        self._update_metric_card("value_loss", metrics.value_loss, metrics)
+        self._update_metric_card("fps", metrics.fps, metrics)
 
     def clear(self) -> None:
         for card in self.metric_cards.values():
             card.clear()
 
-    def _update_metric_card(self, key: str, value: float | None) -> None:
+    def _update_metric_card(self, key: str, value: float | None, metrics: TrainingMetrics) -> None:
         card = self.metric_cards[key]
         card.set_value_text(self._formatters[key](value))
         if value is not None:
-            card.add_point(value)
+            x_value = float(metrics.episode) if key in AXIS_METRIC_KEYS else None
+            card.add_point(value, x_value=x_value)
 
 
 class TrainingMonitorView(QWidget):

@@ -4,12 +4,15 @@ eval/env_generator.py
 Environment generation utilities for RQ1 and RQ2 evaluation.
 
 RQ1: 30 target tasks at fixed difficulty (~30% hole density, 12x12).
+     Each target task is exported as a progressive curriculum: start on an
+     empty map, then add the target holes gradually until the final map.
 RQ2: 1 fixed target task + 15 test environments (3 density levels x 5 maps).
      Structural dissimilarity d(A,B) is reported to verify test env diversity.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from itertools import combinations
@@ -18,7 +21,7 @@ from typing import Dict, List, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 
-from frozen_lake import FrozenLakeEnv, generate_random_map
+from eval.frozen_lake import FrozenLakeEnv, generate_random_map
 
 # ---------------------------------------------------------------------------
 # Global defaults
@@ -27,6 +30,11 @@ from frozen_lake import FrozenLakeEnv, generate_random_map
 SIZE        = 12                  # grid side length
 MAX_DENSITY = 43 / (SIZE * SIZE)  # 0.2986 — largest discrete density < 30%
 RQ1_N       = 30                  # number of target tasks for RQ1
+RQ1_CURRICULUM_STEPS = 4          # maps per RQ1 curriculum, including empty + target
+RQ1_EPISODES_PER_STEP = 1000      # training episodes for each RQ1 curriculum step
+RQ1_MAX_STEPS_PER_EPISODE = 100   # max steps for each training episode
+RQ1_EVAL_EPISODES = 100            # checkpoint evaluation episodes for each RQ1 curriculum
+RQ1_EVAL_MAX_STEPS_PER_EPISODE = 100
 
 RQ2_DENSITY_LEVELS = [0.10, 0.20, MAX_DENSITY]  # hole densities for RQ2 test envs
 RQ2_N_PER_LEVEL    = 5                           # test maps per density level
@@ -223,6 +231,94 @@ _DEFAULT_REWARD_CONFIG = {
 }
 
 
+def _empty_map_like(map_desc: List[str]) -> List[str]:
+    """Return a no-hole map with the same size and S/G positions as map_desc."""
+    n = len(map_desc)
+    rows = [["F" for _ in range(n)] for _ in range(n)]
+    start = (0, 0)
+    goal = (n - 1, n - 1)
+    for row_index, row in enumerate(map_desc):
+        for col_index, tile in enumerate(row):
+            if tile == "S":
+                start = (row_index, col_index)
+            elif tile == "G":
+                goal = (row_index, col_index)
+    rows[start[0]][start[1]] = "S"
+    rows[goal[0]][goal[1]] = "G"
+    return ["".join(row) for row in rows]
+
+
+def _hole_positions(map_desc: List[str]) -> List[tuple[int, int]]:
+    """Return target hole positions in deterministic row-major order."""
+    positions: List[tuple[int, int]] = []
+    for row_index, row in enumerate(map_desc):
+        for col_index, tile in enumerate(row):
+            if tile == "H":
+                positions.append((row_index, col_index))
+    return positions
+
+
+def _map_with_first_holes(
+    target_map: List[str],
+    holes: List[tuple[int, int]],
+    hole_count: int,
+) -> List[str]:
+    rows = [list(row) for row in _empty_map_like(target_map)]
+    for row_index, col_index in holes[:hole_count]:
+        rows[row_index][col_index] = "H"
+    return ["".join(row) for row in rows]
+
+
+def progressive_hole_curriculum_maps(
+    target_map: List[str],
+    steps: int = RQ1_CURRICULUM_STEPS,
+) -> List[List[str]]:
+    """
+    Build a sequence of maps from easy to target.
+
+    The first map is empty. The last map is exactly `target_map`. Intermediate
+    maps add row-major subsets of the target holes, spread approximately evenly.
+    """
+    if steps < 2:
+        raise ValueError("RQ1 progressive curricula require at least 2 steps.")
+
+    holes = _hole_positions(target_map)
+    total_holes = len(holes)
+    maps: List[List[str]] = []
+    for step_index in range(steps):
+        if step_index == steps - 1:
+            hole_count = total_holes
+        else:
+            hole_count = round((step_index / (steps - 1)) * total_holes)
+        maps.append(_map_with_first_holes(target_map, holes, hole_count))
+    return maps
+
+
+def _make_environment_dict(
+    map_desc: List[str],
+    task_name: str,
+    *,
+    task_id: int | str = 0,
+    metadata: Optional[Dict] = None,
+) -> dict:
+    n = len(map_desc)
+    return {
+        "environment_id": "frozen_lake",
+        "task_id": task_id,
+        "task_name": task_name,
+        "metadata": metadata or {},
+        "task_config": {
+            "hole_probability": round(hole_density(map_desc), 6),
+            "is_slippery": False,
+            "map_desc": list(map_desc),
+            "size": n,
+            "success_rate": 0.333333,
+        },
+        "reward_config": _DEFAULT_REWARD_CONFIG,
+        "termination_config": {},
+    }
+
+
 def _make_curriculum_dict(
     map_desc: List[str],
     task_name: str,
@@ -235,7 +331,6 @@ def _make_curriculum_dict(
         "environments": [{ environment definition }]
       }
     """
-    n = len(map_desc)
     return {
         "curriculum": {
             "steps": [
@@ -246,42 +341,126 @@ def _make_curriculum_dict(
             ],
         },
         "environments": [
-            {
-                "environment_id": "frozen_lake",
-                "task_id": 0,
-                "task_name": task_name,
-                "metadata": {},
-                "task_config": {
-                    "hole_probability": round(hole_density(map_desc), 6),
-                    "is_slippery": False,
-                    "map_desc": list(map_desc),
-                    "size": n,
-                    "success_rate": 0.333333,
-                },
-                "reward_config": _DEFAULT_REWARD_CONFIG,
-                "termination_config": {},
-            }
+            _make_environment_dict(map_desc, task_name, task_id=0)
         ],
+    }
+
+
+def make_progressive_rq1_curriculum_dict(
+    target_map: List[str],
+    task_name: str,
+    *,
+    curriculum_steps: int = RQ1_CURRICULUM_STEPS,
+    episodes_per_step: int = RQ1_EPISODES_PER_STEP,
+    max_steps_per_episode: int = RQ1_MAX_STEPS_PER_EPISODE,
+    evaluation_episodes: int = RQ1_EVAL_EPISODES,
+    evaluation_max_steps_per_episode: int = RQ1_EVAL_MAX_STEPS_PER_EPISODE,
+) -> dict:
+    """
+    Build a real RQ1 curriculum for one target map.
+
+    The curriculum contains `curriculum_steps` environments. Step 1 is an empty
+    map of the same size, and the final step is the original RQ1 target map.
+    Every step uses default Q-learning parameters, except `max_episodes`, which
+    is set from `episodes_per_step` to make episode-budget sweeps easy.
+    """
+    if episodes_per_step <= 0:
+        raise ValueError("episodes_per_step must be positive.")
+    if max_steps_per_episode <= 0:
+        raise ValueError("max_steps_per_episode must be positive.")
+    if evaluation_episodes <= 0:
+        raise ValueError("evaluation_episodes must be positive.")
+    if evaluation_max_steps_per_episode <= 0:
+        raise ValueError("evaluation_max_steps_per_episode must be positive.")
+
+    maps = progressive_hole_curriculum_maps(target_map, steps=curriculum_steps)
+    target_hole_count = len(_hole_positions(target_map))
+    environments = []
+    curriculum_steps_payload = []
+    for step_index, map_desc in enumerate(maps):
+        step_number = step_index + 1
+        hole_count = len(_hole_positions(map_desc))
+        step_name = f"{task_name} - Curriculum Step {step_number:02d}/{len(maps):02d}"
+        environments.append(
+            _make_environment_dict(
+                map_desc,
+                step_name,
+                task_id=step_index,
+                metadata={
+                    "curriculum_role": "rq1_progressive_holes",
+                    "curriculum_step": step_number,
+                    "curriculum_steps": len(maps),
+                    "hole_count": hole_count,
+                    "target_hole_count": target_hole_count,
+                    "target_task_name": task_name,
+                },
+            )
+        )
+        curriculum_steps_payload.append(
+            {
+                "env_id": step_index,
+                "algorithm": "q_learning",
+                "max_episodes": episodes_per_step,
+                "max_episode_length": max_steps_per_episode,
+            }
+        )
+
+    return {
+        "curriculum": {
+            "size": len(curriculum_steps_payload),
+            "steps": curriculum_steps_payload,
+        },
+        "environments": environments,
+        "evaluation": {
+            "evaluation_env": len(environments) - 1,
+            "eval_episodes": evaluation_episodes,
+            "max_episode_length": evaluation_max_steps_per_episode,
+        },
     }
 
 
 def export_rq1_curricula(
     tasks: List[List[str]],
     output_dir: str = "eval/curricula/rq1",
+    curriculum_steps: int = RQ1_CURRICULUM_STEPS,
+    episodes_per_step: int = RQ1_EPISODES_PER_STEP,
+    max_steps_per_episode: int = RQ1_MAX_STEPS_PER_EPISODE,
+    evaluation_episodes: int = RQ1_EVAL_EPISODES,
+    evaluation_max_steps_per_episode: int = RQ1_EVAL_MAX_STEPS_PER_EPISODE,
 ) -> None:
     """
-    Save each RQ1 target task as a single-task curriculum JSON.
+    Save each RQ1 target task both alone and as a progressive curriculum JSON.
 
-    Output: eval/curricula/rq1/task_001.json … task_030.json
+    Output:
+      eval/curricula/rq1/task_001.json … task_030.json
+      eval/curricula/rq1/curriculum_001.json … curriculum_030.json
     """
     os.makedirs(output_dir, exist_ok=True)
     for i, task in enumerate(tasks, start=1):
         name     = f"Frozen Lake {len(task)}x{len(task)} - RQ1 Task {i:03d}"
-        payload  = _make_curriculum_dict(task, name)
-        out_path = os.path.join(output_dir, f"task_{i:03d}.json")
-        with open(out_path, "w") as f:
-            json.dump(payload, f, indent=2)
-    print(f"  Saved {len(tasks)} RQ1 curricula → {output_dir}/")
+        task_payload = _make_curriculum_dict(task, name)
+        task_out_path = os.path.join(output_dir, f"task_{i:03d}.json")
+        with open(task_out_path, "w") as f:
+            json.dump(task_payload, f, indent=2)
+
+        curriculum_payload = make_progressive_rq1_curriculum_dict(
+            task,
+            name,
+            curriculum_steps=curriculum_steps,
+            episodes_per_step=episodes_per_step,
+            max_steps_per_episode=max_steps_per_episode,
+            evaluation_episodes=evaluation_episodes,
+            evaluation_max_steps_per_episode=evaluation_max_steps_per_episode,
+        )
+        curriculum_out_path = os.path.join(output_dir, f"curriculum_{i:03d}.json")
+        with open(curriculum_out_path, "w") as f:
+            json.dump(curriculum_payload, f, indent=2)
+    print(
+        f"  Saved {len(tasks)} RQ1 tasks and progressive curricula "
+        f"({curriculum_steps} steps, {episodes_per_step} episodes/step, "
+        f"{max_steps_per_episode} max steps/episode, "
+        f"{evaluation_episodes} eval episodes) → {output_dir}/"
+    )
 
 
 def export_rq2_curricula(
@@ -430,7 +609,47 @@ def visualize_rq2_envs(
 # Smoke-test
 # ---------------------------------------------------------------------------
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate RQ1/RQ2 FrozenLake evaluation curricula.")
+    parser.add_argument(
+        "--rq1-curriculum-steps",
+        type=int,
+        default=RQ1_CURRICULUM_STEPS,
+        help=(
+            "Number of maps in each RQ1 progressive curriculum, including "
+            "the empty map and final target map."
+        ),
+    )
+    parser.add_argument(
+        "--rq1-episodes-per-step",
+        type=int,
+        default=RQ1_EPISODES_PER_STEP,
+        help="Training episode budget for each RQ1 curriculum step.",
+    )
+    parser.add_argument(
+        "--rq1-max-steps-per-episode",
+        type=int,
+        default=RQ1_MAX_STEPS_PER_EPISODE,
+        help="Maximum steps per training episode for each generated RQ1 curriculum step.",
+    )
+    parser.add_argument(
+        "--rq1-eval-episodes",
+        type=int,
+        default=RQ1_EVAL_EPISODES,
+        help="Checkpoint evaluation episodes for each generated RQ1 curriculum.",
+    )
+    parser.add_argument(
+        "--rq1-eval-max-steps-per-episode",
+        type=int,
+        default=RQ1_EVAL_MAX_STEPS_PER_EPISODE,
+        help="Maximum steps per checkpoint evaluation episode for generated RQ1 curricula.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = _parse_args()
+
     # --- RQ1 ---
     print("Generating RQ1 tasks …")
     rq1_tasks = generate_rq1_tasks()
@@ -461,5 +680,12 @@ if __name__ == "__main__":
 
     # --- Export ---
     print("Exporting curriculum JSON files …")
-    export_rq1_curricula(rq1_tasks)
+    export_rq1_curricula(
+        rq1_tasks,
+        curriculum_steps=args.rq1_curriculum_steps,
+        episodes_per_step=args.rq1_episodes_per_step,
+        max_steps_per_episode=args.rq1_max_steps_per_episode,
+        evaluation_episodes=args.rq1_eval_episodes,
+        evaluation_max_steps_per_episode=args.rq1_eval_max_steps_per_episode,
+    )
     export_rq2_curricula(target, test_envs)

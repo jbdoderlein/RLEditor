@@ -10,8 +10,10 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -39,6 +42,7 @@ FROZEN_LAKE_ACTION_SYMBOLS = {
     2: "→",
     3: "↑",
 }
+DEFAULT_MAX_STEPS_PER_EPISODE = 100
 
 
 @dataclass(slots=True)
@@ -168,6 +172,122 @@ class _QTableDialog(QDialog):
         best_value = max(value for _action, value in values)
         best_actions = [action for action, value in values if value == best_value]
         return min(best_actions)
+
+
+class _TrainingEdgeEditDialog(QDialog):
+    def __init__(self, config: RunConfig, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Live edit training")
+        self.resize(420, 320)
+        self._original_config = RunConfig.from_dict(config.to_dict())
+
+        root = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.algorithm_combo = QComboBox(self)
+        self.algorithm_combo.addItem("Q-learning", "q_learning")
+        self.algorithm_combo.addItem("Stable-Baselines3 DQN", "sb3_dqn")
+        self.algorithm_combo.addItem("Stable-Baselines3 PPO", "sb3_ppo")
+        algorithm_index = self.algorithm_combo.findData(self._original_config.algorithm)
+        if algorithm_index < 0:
+            self.algorithm_combo.addItem(self._original_config.algorithm, self._original_config.algorithm)
+            algorithm_index = self.algorithm_combo.findData(self._original_config.algorithm)
+        self.algorithm_combo.setCurrentIndex(max(0, algorithm_index))
+        self.algorithm_combo.setEnabled(False)
+
+        self.episode_count_spin = QSpinBox(self)
+        self.episode_count_spin.setRange(0, 1_000_000)
+        self.episode_count_spin.setSpecialValueText("No limit")
+        self.episode_count_spin.setValue(
+            0 if self._original_config.max_episodes is None else self._original_config.max_episodes
+        )
+
+        self.max_steps_per_episode_spin = QSpinBox(self)
+        self.max_steps_per_episode_spin.setRange(0, 10_000_000)
+        self.max_steps_per_episode_spin.setSpecialValueText("No limit")
+        self.max_steps_per_episode_spin.setValue(
+            self._default_max_steps_per_episode_value(self._original_config)
+        )
+
+        self.max_steps_spin = QSpinBox(self)
+        self.max_steps_spin.setRange(0, 50_000_000)
+        self.max_steps_spin.setSpecialValueText("No limit")
+        self.max_steps_spin.setValue(
+            0 if self._original_config.max_steps is None else self._original_config.max_steps
+        )
+
+        self.learning_rate_spin = QDoubleSpinBox(self)
+        self.learning_rate_spin.setRange(0.0, 1.0)
+        self.learning_rate_spin.setDecimals(4)
+        self.learning_rate_spin.setSingleStep(0.01)
+        self.learning_rate_spin.setValue(self._original_config.learning_rate)
+
+        self.discount_factor_spin = QDoubleSpinBox(self)
+        self.discount_factor_spin.setRange(0.0, 1.0)
+        self.discount_factor_spin.setDecimals(4)
+        self.discount_factor_spin.setSingleStep(0.01)
+        self.discount_factor_spin.setValue(self._original_config.gamma)
+
+        self.epsilon_spin = QDoubleSpinBox(self)
+        self.epsilon_spin.setRange(0.0, 1.0)
+        self.epsilon_spin.setDecimals(4)
+        self.epsilon_spin.setSingleStep(0.01)
+        self.epsilon_spin.setValue(self._original_config.epsilon)
+
+        self.trace_sample_rate_spin = QDoubleSpinBox(self)
+        self.trace_sample_rate_spin.setRange(0.0, 100.0)
+        self.trace_sample_rate_spin.setDecimals(1)
+        self.trace_sample_rate_spin.setSingleStep(5.0)
+        self.trace_sample_rate_spin.setSuffix(" %")
+        self.trace_sample_rate_spin.setValue(self._original_config.episode_trace_sample_rate * 100.0)
+
+        self.seed_spin = QSpinBox(self)
+        self.seed_spin.setRange(-1, 2_147_483_647)
+        self.seed_spin.setSpecialValueText("Random")
+        self.seed_spin.setValue(-1 if self._original_config.seed is None else self._original_config.seed)
+
+        form.addRow("Algorithm", self.algorithm_combo)
+        form.addRow("Episodes", self.episode_count_spin)
+        form.addRow("Max steps / episode", self.max_steps_per_episode_spin)
+        form.addRow("Max steps", self.max_steps_spin)
+        form.addRow("Learning rate", self.learning_rate_spin)
+        form.addRow("Discount factor", self.discount_factor_spin)
+        form.addRow("Epsilon", self.epsilon_spin)
+        form.addRow("Recorded episodes", self.trace_sample_rate_spin)
+        form.addRow("Seed", self.seed_spin)
+        root.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, self)
+        buttons.addButton("Edit", QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def edited_config(self) -> RunConfig:
+        config = RunConfig.from_dict(self._original_config.to_dict())
+        config.max_episodes = self.episode_count_spin.value() if self.episode_count_spin.value() > 0 else None
+        config.max_steps_per_episode = (
+            self.max_steps_per_episode_spin.value()
+            if self.max_steps_per_episode_spin.value() > 0
+            else None
+        )
+        config.max_steps = self.max_steps_spin.value() if self.max_steps_spin.value() > 0 else None
+        config.learning_rate = self.learning_rate_spin.value()
+        config.gamma = self.discount_factor_spin.value()
+        config.epsilon = self.epsilon_spin.value()
+        config.episode_trace_sample_rate = self.trace_sample_rate_spin.value() / 100.0
+        config.seed = self.seed_spin.value() if self.seed_spin.value() >= 0 else None
+
+        config.hyperparameters = dict(config.hyperparameters)
+        config.hyperparameters["learning_rate"] = config.learning_rate
+        config.hyperparameters["gamma"] = config.gamma
+        config.hyperparameters["epsilon"] = config.epsilon
+        return config
+
+    def _default_max_steps_per_episode_value(self, config: RunConfig) -> int:
+        if config.max_steps_per_episode is not None:
+            return int(config.max_steps_per_episode)
+        return DEFAULT_MAX_STEPS_PER_EPISODE
 
 
 def _q_values_from_checkpoint(checkpoint: Checkpoint) -> dict[tuple[str, int], float]:
@@ -631,6 +751,7 @@ class CheckpointHistoryView(QWidget):
     checkpoint_evaluation_requested = Signal(object)
     curriculum_import_requested = Signal(object)
     training_run_config_selected = Signal(object)
+    training_edge_live_edit_requested = Signal(object, object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -687,6 +808,11 @@ class CheckpointHistoryView(QWidget):
             "Evaluate the selected checkpoint using the Evaluation tab settings."
         )
         self.evaluate_checkpoint_button.setEnabled(False)
+        self.live_edit_button = QPushButton("Live Edit", right_panel)
+        self.live_edit_button.setToolTip(
+            "Edit this training edge and replay the deepest descendant branch."
+        )
+        self.live_edit_button.setEnabled(False)
         self.show_q_table_button = QPushButton("Show Q Table", right_panel)
         self.show_q_table_button.setToolTip(
             "Open the Q-learning table stored in the selected checkpoint."
@@ -737,6 +863,7 @@ class CheckpointHistoryView(QWidget):
         checkpoint_buttons_layout.addStretch(1)
 
         trace_buttons_layout = QHBoxLayout()
+        trace_buttons_layout.addWidget(self.live_edit_button)
         trace_buttons_layout.addWidget(self.export_curriculum_button)
         trace_buttons_layout.addWidget(self.evaluate_checkpoint_button)
         trace_buttons_layout.addWidget(self.show_q_table_button)
@@ -770,6 +897,7 @@ class CheckpointHistoryView(QWidget):
         self.export_curriculum_plan_button.clicked.connect(self._export_selected_curriculum_plan)
         self.export_checkpoint_button.clicked.connect(self._export_selected_checkpoint)
         self.evaluate_checkpoint_button.clicked.connect(self._emit_evaluate_selected_checkpoint)
+        self.live_edit_button.clicked.connect(self._request_live_edit_for_selected_edge)
         self.show_q_table_button.clicked.connect(self._show_selected_q_table)
         self.import_checkpoint_button.clicked.connect(self._import_checkpoint_from_file)
         self.import_curriculum_button.clicked.connect(self._import_curriculum_from_file)
@@ -853,6 +981,7 @@ class CheckpointHistoryView(QWidget):
         self._current_segment_episodes = []
         self.inspect_episode_button.setEnabled(False)
         self._set_export_buttons_enabled(False)
+        self._set_live_edit_button_enabled(False)
         self._set_q_table_checkpoint(None)
 
     def _render_empty_segment_selection(self) -> None:
@@ -862,6 +991,7 @@ class CheckpointHistoryView(QWidget):
         self.episode_list.clear()
         self._current_segment_episodes = []
         self.inspect_episode_button.setEnabled(False)
+        self._set_live_edit_button_enabled(False)
 
     def _show_node_details(self, node: _LineageNode) -> None:
         self.details_group.setTitle("Node Details")
@@ -882,6 +1012,7 @@ class CheckpointHistoryView(QWidget):
             self.selection_label.setText(f"Selected checkpoints: {len(selected_checkpoint_nodes)}")
             self._set_checkpoint_comparison_details(selected_checkpoint_nodes)
             self._set_export_buttons_enabled(node.checkpoint is not None)
+            self._set_live_edit_button_enabled(False)
             if node.checkpoint is not None:
                 self._set_checkpoint_evaluation_episodes(node.checkpoint)
             else:
@@ -893,6 +1024,7 @@ class CheckpointHistoryView(QWidget):
             self._set_root_details(node)
             self._render_empty_segment_selection()
             self._set_export_buttons_enabled(False)
+            self._set_live_edit_button_enabled(False)
             self._set_q_table_checkpoint(None)
             return
 
@@ -904,6 +1036,7 @@ class CheckpointHistoryView(QWidget):
         self.training_source_label.setText(f"Training start checkpoint: {checkpoint.label}")
         self._set_checkpoint_details(checkpoint, heading="Selected checkpoint")
         self._set_export_buttons_enabled(True)
+        self._set_live_edit_button_enabled(False)
         self._set_checkpoint_evaluation_episodes(checkpoint)
 
     def _show_edge_details(self, edge: _LineageEdge) -> None:
@@ -913,6 +1046,7 @@ class CheckpointHistoryView(QWidget):
         checkpoint = edge.target_checkpoint
         run = edge.run
         self._set_export_buttons_enabled(True)
+        self._set_live_edit_button_enabled(self._live_edit_config_for_edge(edge) is not None)
         self.selection_label.setText(
             f"Selected training run: {run.run_id if run is not None else checkpoint.run_id or 'unknown'}"
         )
@@ -946,6 +1080,65 @@ class CheckpointHistoryView(QWidget):
         if run_config is None:
             return None
         return RunConfig.from_dict(run_config)
+
+    def _live_edit_config_for_edge(self, edge: _LineageEdge) -> RunConfig | None:
+        config = self._training_config_for_edge(edge)
+        if config is None:
+            return None
+        return self._config_limited_to_edge_segment(
+            config,
+            source_checkpoint=edge.source_checkpoint,
+            target_checkpoint=edge.target_checkpoint,
+        )
+
+    def _config_limited_to_edge_segment(
+        self,
+        config: RunConfig,
+        *,
+        source_checkpoint: Checkpoint | None,
+        target_checkpoint: Checkpoint,
+    ) -> RunConfig:
+        segment_config = RunConfig.from_dict(config.to_dict())
+        segment_steps = target_checkpoint.step
+        segment_episodes = target_checkpoint.episode
+        if (
+            source_checkpoint is not None
+            and source_checkpoint.run_id is not None
+            and source_checkpoint.run_id == target_checkpoint.run_id
+        ):
+            segment_steps = max(0, target_checkpoint.step - source_checkpoint.step)
+            segment_episodes = max(0, target_checkpoint.episode - source_checkpoint.episode)
+
+        if segment_episodes > 0:
+            segment_config.max_episodes = segment_episodes
+        if segment_config.max_steps is not None or segment_episodes <= 0:
+            segment_config.max_steps = segment_steps if segment_steps > 0 else segment_config.max_steps
+        return segment_config
+
+    def _request_live_edit_for_selected_edge(self) -> None:
+        selected_edge_id = self.graph_widget.selected_edge_id
+        edge = self.graph_widget.edge_for_id(selected_edge_id) if selected_edge_id is not None else None
+        if edge is None:
+            QMessageBox.information(
+                self,
+                "Live Edit",
+                "Select a training edge before starting live edit.",
+            )
+            return
+
+        config = self._live_edit_config_for_edge(edge)
+        if config is None:
+            QMessageBox.information(
+                self,
+                "Live Edit",
+                "This training edge does not contain a replayable run configuration.",
+            )
+            return
+
+        dialog = _TrainingEdgeEditDialog(config, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.training_edge_live_edit_requested.emit(edge, dialog.edited_config())
 
     def _set_checkpoint_evaluation_episodes(self, checkpoint: Checkpoint) -> None:
         self.segment_group.setTitle("Evaluation Episodes")
@@ -1013,6 +1206,9 @@ class CheckpointHistoryView(QWidget):
         self.export_curriculum_plan_button.setEnabled(enabled)
         self.export_checkpoint_button.setEnabled(enabled)
         self.evaluate_checkpoint_button.setEnabled(enabled)
+
+    def _set_live_edit_button_enabled(self, enabled: bool) -> None:
+        self.live_edit_button.setEnabled(enabled)
 
     def _set_q_table_checkpoint(self, checkpoint: Checkpoint | None) -> None:
         enabled = _checkpoint_has_q_learning_state(checkpoint)

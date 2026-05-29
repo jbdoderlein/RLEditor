@@ -5,11 +5,11 @@ import json
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from rleditor.application.services import TrainingHistorySnapshot
 from rleditor.core.models import Checkpoint, EpisodeTrace, RunConfig, TaskSnapshot, TrainingRun, TrainingStatus
-from rleditor.ui.views.checkpoint_history_view import CheckpointHistoryView
+from rleditor.ui.views.checkpoint_history_view import CheckpointHistoryView, _TrainingEdgeEditDialog
 
 
 def _app() -> QApplication:
@@ -282,6 +282,152 @@ def test_checkpoint_history_view_emits_training_config_when_edge_is_selected() -
     assert emitted[0].max_steps_per_episode == 80
     assert emitted[0].learning_rate == 0.15
     assert emitted[0].gamma == 0.93
+
+
+def test_checkpoint_history_view_live_edit_dialog_edits_edge_segment_config() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    config = RunConfig(
+        algorithm="q_learning",
+        max_steps=100,
+        max_episodes=10,
+        max_steps_per_episode=80,
+        episode_trace_sample_rate=0.4,
+        learning_rate=0.15,
+        gamma=0.93,
+        epsilon=0.8,
+        seed=12,
+    )
+    run = TrainingRun(
+        run_id="run_segment",
+        task_id="task_segment",
+        status=TrainingStatus.FINISHED,
+        metadata={"run_config": config.to_dict()},
+    )
+    source_checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_source",
+        label="Source checkpoint",
+        created_at="2026-05-17 09:00:00",
+        reason="breakpoint",
+        run_id="run_segment",
+        task_id="task_segment",
+        task_name="Segment Task",
+        step=40,
+        episode=4,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Segment Task"),
+    )
+    target_checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_target",
+        label="Target checkpoint",
+        created_at="2026-05-17 09:10:00",
+        reason="run_finished",
+        parent_checkpoint_id="checkpoint_source",
+        run_id="run_segment",
+        task_id="task_segment",
+        task_name="Segment Task",
+        step=70,
+        episode=7,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Segment Task"),
+    )
+    view.set_history(
+        TrainingHistorySnapshot(
+            runs=[run],
+            checkpoints=[source_checkpoint, target_checkpoint],
+            episodes_by_run={},
+            run_task_snapshots={},
+        )
+    )
+
+    edge = view.graph_widget.edge_for_id("edge:checkpoint_target")
+    assert edge is not None
+    view._on_edge_selected(edge)
+
+    live_config = view._live_edit_config_for_edge(edge)
+    assert live_config is not None
+    assert view.live_edit_button.isEnabled()
+    assert live_config.max_episodes == 3
+    assert live_config.max_steps == 30
+
+    dialog = _TrainingEdgeEditDialog(live_config)
+    dialog.episode_count_spin.setValue(5)
+    dialog.max_steps_spin.setValue(55)
+    dialog.learning_rate_spin.setValue(0.25)
+    dialog.discount_factor_spin.setValue(0.9)
+    dialog.epsilon_spin.setValue(0.6)
+    dialog.seed_spin.setValue(-1)
+    edited = dialog.edited_config()
+
+    assert edited.algorithm == "q_learning"
+    assert edited.max_episodes == 5
+    assert edited.max_steps == 55
+    assert edited.learning_rate == 0.25
+    assert edited.gamma == 0.9
+    assert edited.epsilon == 0.6
+    assert edited.seed is None
+    assert edited.hyperparameters["learning_rate"] == 0.25
+
+    default_dialog = _TrainingEdgeEditDialog(RunConfig(max_steps_per_episode=None))
+    assert default_dialog.max_steps_per_episode_spin.value() == 100
+
+
+def test_checkpoint_history_view_live_edit_request_emits_selected_edge(monkeypatch) -> None:
+    _app()
+    view = CheckpointHistoryView()
+    config = RunConfig(max_episodes=3, max_steps_per_episode=20)
+    emitted_config = RunConfig(max_episodes=4, max_steps_per_episode=30)
+    run = TrainingRun(
+        run_id="run_live_edit",
+        task_id="task_live_edit",
+        status=TrainingStatus.FINISHED,
+        metadata={"run_config": config.to_dict()},
+    )
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_live_edit",
+        label="Live edit checkpoint",
+        created_at="2026-05-17 09:10:00",
+        reason="run_finished",
+        run_id="run_live_edit",
+        task_id="task_live_edit",
+        task_name="Live Edit Task",
+        step=60,
+        episode=3,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Live Edit Task"),
+    )
+    view.set_history(
+        TrainingHistorySnapshot(
+            runs=[run],
+            checkpoints=[checkpoint],
+            episodes_by_run={},
+            run_task_snapshots={},
+        )
+    )
+    edge = view.graph_widget.edge_for_id("edge:checkpoint_live_edit")
+    assert edge is not None
+    view.graph_widget.select_edge(edge.edge_id)
+    captured_dialog_config: list[RunConfig] = []
+
+    class _FakeDialog:
+        def __init__(self, config: RunConfig, parent=None) -> None:
+            _ = parent
+            captured_dialog_config.append(config)
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def edited_config(self) -> RunConfig:
+            return emitted_config
+
+    monkeypatch.setattr(
+        "rleditor.ui.views.checkpoint_history_view._TrainingEdgeEditDialog",
+        _FakeDialog,
+    )
+    emitted: list[tuple[object, RunConfig]] = []
+    view.training_edge_live_edit_requested.connect(lambda edge, config: emitted.append((edge, config)))
+
+    view._request_live_edit_for_selected_edge()
+
+    assert captured_dialog_config[0].max_episodes == 3
+    assert emitted == [(edge, emitted_config)]
 
 
 def test_checkpoint_history_view_multiple_node_selection_compares_metric_columns() -> None:

@@ -2,13 +2,25 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from PySide6.QtWidgets import QComboBox, QFormLayout, QLabel, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from rleditor.core.models import TaskDefinition
 
 
 class EvaluationView(QWidget):
     """Configuration for checkpoint evaluation runs."""
+
+    import_task_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -27,6 +39,12 @@ class EvaluationView(QWidget):
 
         form = QFormLayout()
         self.task_combo = QComboBox(self)
+        self.import_task_button = QPushButton("Import Task", self)
+        self.import_task_button.setToolTip("Import a task JSON or a generated curriculum task file.")
+        self.import_task_button.clicked.connect(self.import_task_requested.emit)
+        task_row = QHBoxLayout()
+        task_row.addWidget(self.task_combo, 1)
+        task_row.addWidget(self.import_task_button)
         self.episode_count_spin = QSpinBox(self)
         self.episode_count_spin.setRange(1, 100_000)
         self.episode_count_spin.setValue(10)
@@ -39,7 +57,7 @@ class EvaluationView(QWidget):
         self.seed_spin.setSpecialValueText("Use training seed")
         self.seed_spin.setValue(-1)
 
-        form.addRow("Task", self.task_combo)
+        form.addRow("Task", task_row)
         form.addRow("Episodes", self.episode_count_spin)
         form.addRow("Max steps / episode", self.max_steps_per_episode_spin)
         form.addRow("Seed", self.seed_spin)
@@ -63,6 +81,10 @@ class EvaluationView(QWidget):
 
         if self._tasks:
             self.task_combo.setCurrentIndex(min(selected_index, len(self._tasks) - 1))
+
+    def set_selected_task_index(self, index: int) -> None:
+        if 0 <= index < len(self._tasks):
+            self.task_combo.setCurrentIndex(index)
 
     def selected_task(self) -> TaskDefinition | None:
         index = self.task_combo.currentData()
