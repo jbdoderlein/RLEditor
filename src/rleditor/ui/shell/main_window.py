@@ -716,11 +716,15 @@ class MainWindow(QMainWindow):
                     "max_duration_seconds": step.get("max_duration_seconds"),
                     "learning_rate": float(step.get("learning_rate", step.get("lr", 0.1))),
                     "gamma": float(step.get("discount_factor", step.get("gamma", 0.99))),
-                    "epsilon": float(step.get("epsilon_start", step.get("epsilon", 0.1))),
+                    "epsilon": float(step.get("epsilon_start", step.get("epsilon", 1.0))),
                     "hyperparameters": hyperparameters,
                     "breakpoints": step.get("breakpoints", []),
                 }
             )
+        config.algorithm = self._normalize_curriculum_algorithm(config.algorithm)
+        if config.algorithm == "q_learning":
+            config.epsilon = 1.0
+            config.hyperparameters["epsilon"] = 1.0
         config.metadata["imported_curriculum_step"] = True
         for rule in config.breakpoints:
             actions = set(rule.actions)

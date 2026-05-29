@@ -420,13 +420,16 @@ def test_curriculum_import_adds_tasks_and_starts_first_step() -> None:
     assert config.max_steps_per_episode == 12
     assert config.learning_rate == 0.2
     assert config.gamma == 0.95
-    assert config.epsilon == 0.3
+    assert config.epsilon == 1.0
+    assert config.hyperparameters["epsilon"] == 1.0
     assert config.evaluation_policy["episode_count"] == 5
     assert config.evaluation_policy["seed"] == 7
     assert captured["kwargs"]["start_from_scratch"] is True
     assert len(window._imported_curriculum_queue) == 1
     queued_task, queued_config = window._imported_curriculum_queue[0]
     assert queued_task is window._task_workspace[-1]
+    assert queued_config.epsilon == 1.0
+    assert queued_config.hyperparameters["epsilon"] == 1.0
     assert queued_config.evaluation_policy["episode_count"] == 5
     assert queued_config.evaluation_policy["seed"] == 7
 

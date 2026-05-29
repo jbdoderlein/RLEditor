@@ -753,6 +753,16 @@ class TrainingRunner(QObject):
             exploration_rate = epsilon * (epsilon_decay ** completed_steps)
             return max(epsilon_min, exploration_rate)
 
+        max_episodes = self._config.max_episodes
+        if max_episodes is not None:
+            if max_episodes <= 1:
+                return max(epsilon_min, epsilon)
+            progress = min(
+                1.0,
+                max(0, self._metrics.episode) / max(max_episodes - 1, 1),
+            )
+            return max(epsilon_min, epsilon * (1.0 - progress))
+
         max_steps = self._config.max_steps
         if max_steps is None or max_steps <= 1:
             return max(epsilon_min, epsilon)

@@ -265,6 +265,32 @@ def test_q_learning_exploration_schedule_honors_decay_and_minimum() -> None:
         assert runner._metrics.exploration_rate == pytest.approx(expected_rate)
 
 
+def test_q_learning_exploration_schedule_decays_over_episode_budget() -> None:
+    runner = TrainingRunner()
+    config = RunConfig(
+        max_steps=None,
+        max_episodes=4,
+        seed=13,
+        epsilon=1.0,
+        hyperparameters={
+            "epsilon": 1.0,
+            "epsilon_min": 0.25,
+        },
+    )
+
+    runner.start(
+        _task(),
+        config,
+        run_id="run_q_episode_epsilon",
+        env_factory=lambda _task: _OneStepChoiceEnv(),
+    )
+
+    expected_rates = [1.0, 2.0 / 3.0, 1.0 / 3.0, 0.25]
+    for expected_rate in expected_rates:
+        runner._on_tick()
+        assert runner._metrics.exploration_rate == pytest.approx(expected_rate)
+
+
 def test_q_learning_training_requires_discrete_action_space() -> None:
     runner = TrainingRunner()
     env = _ContinuousActionEnv()

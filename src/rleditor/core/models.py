@@ -244,7 +244,7 @@ class RunConfig:
     max_duration_seconds: float | None = None
     learning_rate: float = 0.1
     gamma: float = 0.99
-    epsilon: float = 0.1
+    epsilon: float = 1.0
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     breakpoints: list[Breakpoint] = field(default_factory=list)
     checkpoint_policy: dict[str, Any] = field(default_factory=dict)
@@ -331,7 +331,7 @@ class RunConfig:
             ),
             learning_rate=float(payload.get("learning_rate", 0.1)),
             gamma=float(payload.get("gamma", 0.99)),
-            epsilon=float(payload.get("epsilon", 0.1)),
+            epsilon=float(payload.get("epsilon", 1.0)),
             hyperparameters=_as_dict(payload.get("hyperparameters")),
             breakpoints=breakpoints,
             checkpoint_policy=_as_dict(payload.get("checkpoint_policy")),

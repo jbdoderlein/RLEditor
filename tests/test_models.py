@@ -97,6 +97,13 @@ def test_run_config_roundtrip_preserves_breakpoint_actions() -> None:
     assert restored.breakpoints[1].actions == ["stop"]
 
 
+def test_run_config_defaults_q_learning_to_full_exploration() -> None:
+    config = RunConfig()
+
+    assert config.epsilon == 1.0
+    assert config.hyperparameters["epsilon"] == 1.0
+
+
 def test_run_config_supports_unlimited_max_steps() -> None:
     config = RunConfig(max_steps=-1)
 
