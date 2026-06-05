@@ -271,6 +271,58 @@ class TrainingService(QObject):
             raise RuntimeError(msg)
         return deepcopy(checkpoint)
 
+    def evaluate_checkpoint_multiple(
+        self,
+        checkpoint_id: str,
+        evaluation_policies: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if self._has_live_runs():
+            msg = "Cannot evaluate a checkpoint while training is active."
+            raise RuntimeError(msg)
+
+        checkpoint_index = self._checkpoint_index(checkpoint_id)
+        if checkpoint_index is None:
+            msg = f"Unknown checkpoint: {checkpoint_id}"
+            raise RuntimeError(msg)
+
+        checkpoint = deepcopy(self._checkpoints[checkpoint_index])
+        learner_state = checkpoint.metadata.get("learner_state")
+        if not isinstance(learner_state, dict):
+            msg = f"Checkpoint {checkpoint_id} does not contain a learner state."
+            raise RuntimeError(msg)
+
+        base_config = self._config_for_checkpoint(checkpoint)
+        rows: list[dict[str, Any]] = []
+        for index, policy in enumerate(evaluation_policies, start=1):
+            config = RunConfig.from_dict(base_config.to_dict())
+            config.evaluation_policy = deepcopy(policy)
+            row = self._evaluation_result_base_row(
+                checkpoint_id=checkpoint.checkpoint_id,
+                policy=policy,
+            )
+            result, error = self._run_checkpoint_evaluation(
+                checkpoint_id=checkpoint.checkpoint_id,
+                config=config,
+                learner_state=deepcopy(learner_state),
+                policy=config.evaluation_policy,
+                evaluation_run_id=f"eval_{checkpoint.checkpoint_id}_{index}",
+                store_result=False,
+            )
+            if result is not None:
+                row.update(
+                    {
+                        "task_name": result.task.name,
+                        "task_id": result.task.task_id,
+                        "environment_id": result.task.environment_id,
+                        **self._metrics_payload(result.metrics),
+                        "error": "",
+                    }
+                )
+            else:
+                row["error"] = error or "Evaluation did not run."
+            rows.append(row)
+        return rows
+
     def start(
         self,
         task: TaskDefinition,
@@ -643,6 +695,35 @@ class TrainingService(QObject):
             policy=policy,
         )
 
+    def _evaluation_result_base_row(
+        self,
+        *,
+        checkpoint_id: str,
+        policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        task_payload = policy.get("task") if isinstance(policy, dict) else None
+        if isinstance(task_payload, dict):
+            task_name = str(
+                task_payload.get("name", task_payload.get("task_name", "Evaluation Task"))
+            )
+            task_id = task_payload.get("task_id")
+            environment_id = str(task_payload.get("environment_id", ""))
+        else:
+            task_name = "Evaluation Task"
+            task_id = None
+            environment_id = ""
+        return {
+            "checkpoint_id": checkpoint_id,
+            "task_name": task_name,
+            "task_id": task_id,
+            "environment_id": environment_id,
+            "episode_count": policy.get("episode_count") if isinstance(policy, dict) else None,
+            "max_steps_per_episode": (
+                policy.get("max_steps_per_episode") if isinstance(policy, dict) else None
+            ),
+            "seed": policy.get("seed") if isinstance(policy, dict) else None,
+        }
+
     def _run_checkpoint_evaluation(
         self,
         *,
@@ -650,6 +731,8 @@ class TrainingService(QObject):
         config: RunConfig,
         learner_state: dict[str, Any],
         policy: dict[str, Any],
+        evaluation_run_id: str | None = None,
+        store_result: bool = True,
     ) -> tuple[EvaluationResult | None, str | None]:
         if not isinstance(policy, dict) or not policy:
             return None, None
@@ -672,7 +755,7 @@ class TrainingService(QObject):
 
         max_steps_per_episode = self._evaluation_max_steps_per_episode(config)
         evaluation_task = self._task_from_policy_payload(task_payload)
-        evaluation_run_id = f"eval_{checkpoint_id}"
+        evaluation_run_id = evaluation_run_id or f"eval_{checkpoint_id}"
 
         try:
             result = evaluate_policy(
@@ -688,9 +771,10 @@ class TrainingService(QObject):
         except Exception as exc:
             return None, str(exc)
 
-        self._episodes_by_run[evaluation_run_id] = deepcopy(result.episodes)
-        self._pending_episodes_by_run[evaluation_run_id] = []
-        self._run_task_snapshots[evaluation_run_id] = deepcopy(result.task_snapshot)
+        if store_result:
+            self._episodes_by_run[evaluation_run_id] = deepcopy(result.episodes)
+            self._pending_episodes_by_run[evaluation_run_id] = []
+            self._run_task_snapshots[evaluation_run_id] = deepcopy(result.task_snapshot)
         return result, None
 
     def _evaluation_metadata_payload(

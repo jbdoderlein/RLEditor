@@ -37,7 +37,7 @@ from rleditor.core.models import (
 from rleditor.plugins.base import EnvironmentPlugin
 from rleditor.plugins.registry import PluginRegistry
 from rleditor.ui.views.checkpoint_history_view import CheckpointHistoryView
-from rleditor.ui.views.evaluation_view import EvaluationView
+from rleditor.ui.views.evaluation_view import EvaluationResultsDialog, EvaluationView
 from rleditor.ui.views.episode_inspector_view import EpisodeInspectorView
 from rleditor.ui.interaction_logging import InteractionLogger
 from rleditor.ui.views.task_editor_view import TaskEditorView
@@ -155,6 +155,7 @@ class MainWindow(QMainWindow):
         self.task_history_view.edit_task_requested.connect(self._edit_task_from_history)
         self.task_history_view.copy_task_requested.connect(self._copy_task_from_history)
         self.evaluation_view.import_task_requested.connect(self._on_task_import_requested)
+        self.evaluation_view.evaluate_multiple_requested.connect(self._on_multiple_evaluation_requested)
         self.task_editor_view.task_changed.connect(self._on_task_changed)
         self.episode_view.create_task_from_moment_requested.connect(self._on_derive_task_from_episode_moment)
         self.history_view.inspect_episode_requested.connect(self._inspect_episode_from_history)
@@ -701,6 +702,48 @@ class MainWindow(QMainWindow):
             policy=policy,
         )
 
+    def _on_multiple_evaluation_requested(self) -> None:
+        checkpoint = self.history_view.selected_checkpoint()
+        if checkpoint is None:
+            self.statusBar().showMessage("Cannot evaluate multiple tasks: no checkpoint selected")
+            return
+
+        policies = self.evaluation_view.build_multiple_evaluation_policies()
+        if not policies:
+            self.statusBar().showMessage("Cannot evaluate multiple tasks: no evaluation task selected")
+            return
+
+        try:
+            self._set_status_busy("evaluation", True)
+            rows = self._training_service.evaluate_checkpoint_multiple(
+                checkpoint.checkpoint_id,
+                policies,
+            )
+        except RuntimeError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+        finally:
+            self._set_status_busy("evaluation", False)
+
+        dialog = EvaluationResultsDialog(rows, self)
+        dialog.exec()
+        failed_count = sum(1 for row in rows if row.get("error"))
+        if failed_count:
+            self.statusBar().showMessage(
+                f"Multiple evaluation completed for {checkpoint.checkpoint_id}: "
+                f"{len(rows) - failed_count}/{len(rows)} succeeded"
+            )
+        else:
+            self.statusBar().showMessage(
+                f"Multiple evaluation completed for {checkpoint.checkpoint_id}: {len(rows)} task(s)"
+            )
+        self._log_interaction(
+            "checkpoint_multiple_evaluated",
+            checkpoint_id=checkpoint.checkpoint_id,
+            evaluation_count=len(rows),
+            failed_count=failed_count,
+        )
+
     def _on_curriculum_import_requested(self, payload: object) -> None:
         try:
             imported_tasks, curriculum_steps = self._curriculum_from_import_payload(payload)
@@ -837,19 +880,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Copied task: {task.name}")
 
     def _on_task_import_requested(self) -> None:
-        selected_path, _selected_filter = QFileDialog.getOpenFileName(
+        selected_paths, _selected_filter = QFileDialog.getOpenFileNames(
             self,
             "Import Task",
             self._task_import_default_directory(),
             "JSON Files (*.json);;All Files (*)",
         )
-        if not selected_path:
+        if not selected_paths:
             return
 
-        path = Path(selected_path).expanduser()
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            self._import_tasks_from_payload(payload)
+            self._import_tasks_from_files(selected_paths)
         except (OSError, TypeError, ValueError) as exc:
             QMessageBox.warning(
                 self,
@@ -857,8 +898,23 @@ class MainWindow(QMainWindow):
                 f"Could not import task:\n{exc}",
             )
 
+    def _import_tasks_from_files(self, paths: list[str] | tuple[str, ...]) -> tuple[int, int | None]:
+        candidates: list[TaskDefinition] = []
+        for raw_path in paths:
+            path = Path(raw_path).expanduser()
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                candidates.extend(self._task_import_candidates_from_payload(payload))
+            except (OSError, TypeError, ValueError) as exc:
+                raise ValueError(f"{path.name}: {exc}") from exc
+
+        return self._import_task_candidates(candidates)
+
     def _import_tasks_from_payload(self, payload: object) -> tuple[int, int | None]:
         candidates = self._task_import_candidates_from_payload(payload)
+        return self._import_task_candidates(candidates)
+
+    def _import_task_candidates(self, candidates: list[TaskDefinition]) -> tuple[int, int | None]:
         if not candidates:
             raise ValueError("No task definitions found.")
 

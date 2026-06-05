@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 
@@ -383,6 +384,66 @@ def test_task_import_from_generated_curriculum_adds_workspace_task_without_train
     assert window.task_history_view.selected_task() is imported_task
     assert window.evaluation_view.selected_task().name == "Generated Eval Task"
     assert training_service.status == TrainingStatus.IDLE
+
+
+def test_task_import_dialog_accepts_multiple_selected_files(tmp_path, monkeypatch) -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+    )
+    first_path = tmp_path / "first_task.json"
+    second_path = tmp_path / "second_task.json"
+    first_path.write_text(
+        json.dumps(
+            {
+                "environment_id": "dummy_env",
+                "name": "Imported First",
+                "config": {"difficulty": 11},
+            }
+        ),
+        encoding="utf-8",
+    )
+    second_path.write_text(
+        json.dumps(
+            {
+                "environment_id": "dummy_env",
+                "name": "Imported Second",
+                "config": {"difficulty": 12},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _select_files(*_args, **_kwargs):
+        return ([str(first_path), str(second_path)], "JSON Files (*.json)")
+
+    monkeypatch.setattr(
+        "rleditor.ui.shell.main_window.QFileDialog.getOpenFileNames",
+        _select_files,
+    )
+
+    window._on_task_import_requested()
+
+    assert [task.name for task in window._task_workspace[-2:]] == [
+        "Imported First",
+        "Imported Second",
+    ]
+    assert window.task_history_view.selected_task().name == "Imported First"
+    assert window.evaluation_view.selected_task().name == "Imported First"
+    assert "Imported 2 task(s)" in window.statusBar().currentMessage()
 
 
 def test_task_import_reuses_existing_matching_workspace_task() -> None:
@@ -1256,6 +1317,98 @@ def test_checkpoint_history_live_edit_planning_avoids_deep_history_snapshot() ->
 
     assert history_snapshot_deep_args == [False]
     assert captured_start["kwargs"]["initial_checkpoint"] is edge.source_checkpoint
+
+
+def test_multiple_evaluation_button_runs_selected_checkpoint_on_checked_tasks(monkeypatch) -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    interaction_logger = _FakeInteractionLogger()
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+        interaction_logger=interaction_logger,  # type: ignore[arg-type]
+    )
+    second_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Second Eval",
+        task_id="task_second_eval",
+        config={"difficulty": 2},
+    )
+    window._add_task_to_workspace(second_task, select=False)
+    for checkbox, _task_index in window.evaluation_view._multi_task_checkboxes:
+        checkbox.setChecked(True)
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_eval",
+        label="Checkpoint Eval",
+        created_at="2026-06-05 10:00:00",
+        reason="test",
+        metadata={"learner_state": {"q_values": []}},
+    )
+    monkeypatch.setattr(window.history_view, "selected_checkpoint", lambda: checkpoint)
+
+    captured: dict[str, object] = {}
+
+    def _evaluate_many(checkpoint_id, policies):
+        captured["checkpoint_id"] = checkpoint_id
+        captured["policies"] = policies
+        return [
+            {
+                "task_name": "Dummy Main Task",
+                "environment_id": "dummy_env",
+                "episode_count": 2,
+                "success_rate": 1.0,
+                "mean_reward": 1.0,
+                "cumulative_reward": 2.0,
+                "episode_length_mean": 3.0,
+                "step": 6,
+                "error": "",
+            }
+        ]
+
+    shown: dict[str, object] = {}
+
+    class _FakeEvaluationResultsDialog:
+        def __init__(self, rows, parent=None):
+            shown["rows"] = rows
+            shown["parent"] = parent
+
+        def exec(self):
+            shown["exec"] = True
+            return 0
+
+    training_service.evaluate_checkpoint_multiple = _evaluate_many  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "rleditor.ui.shell.main_window.EvaluationResultsDialog",
+        _FakeEvaluationResultsDialog,
+    )
+
+    window.evaluation_view.evaluate_multiple_button.click()
+
+    assert captured["checkpoint_id"] == "checkpoint_eval"
+    policies = captured["policies"]
+    assert [policy["task"]["name"] for policy in policies] == ["Dummy Main Task", "Second Eval"]
+    assert shown["rows"][0]["task_name"] == "Dummy Main Task"
+    assert shown["parent"] is window
+    assert shown["exec"] is True
+    assert "Multiple evaluation completed for checkpoint_eval" in window.statusBar().currentMessage()
+    logged = [
+        payload
+        for event, payload in interaction_logger.records
+        if event == "checkpoint_multiple_evaluated"
+    ]
+    assert logged[-1]["evaluation_count"] == 1
 
 
 def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() -> None:

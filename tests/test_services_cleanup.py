@@ -714,6 +714,50 @@ def test_training_service_manually_evaluates_selected_checkpoint_with_fixed_seed
     assert [trace.metadata["seed"] for trace in evaluation_episodes] == [101, 102]
 
 
+def test_training_service_evaluates_checkpoint_multiple_without_storing_results() -> None:
+    service = TrainingService(_history_registry())
+    task = TaskDefinition(environment_id="tiny_env", name="Training Task", task_id="task_train")
+    first_eval_task = TaskDefinition(environment_id="tiny_env", name="Eval A", task_id="task_eval_a")
+    second_eval_task = TaskDefinition(environment_id="tiny_env", name="Eval B", task_id="task_eval_b")
+    config = RunConfig(max_steps=20, max_episodes=1, seed=23)
+
+    service.start(task, config)
+    for _ in range(10):
+        service._runner._on_tick()
+        if service.status == TrainingStatus.FINISHED:
+            break
+
+    checkpoint_id = service.history_snapshot().checkpoints[-1].checkpoint_id
+    rows = service.evaluate_checkpoint_multiple(
+        checkpoint_id,
+        [
+            {
+                "task": first_eval_task.to_dict(),
+                "episode_count": 2,
+                "max_steps_per_episode": 5,
+                "seed": 101,
+                "trace_sample_rate": 1.0,
+            },
+            {
+                "task": second_eval_task.to_dict(),
+                "episode_count": 1,
+                "max_steps_per_episode": 5,
+                "seed": 201,
+                "trace_sample_rate": 1.0,
+            },
+        ],
+    )
+    snapshot = service.history_snapshot()
+    checkpoint = snapshot.checkpoints[-1]
+
+    assert [row["task_name"] for row in rows] == ["Eval A", "Eval B"]
+    assert rows[0]["episode"] == 2
+    assert rows[1]["episode"] == 1
+    assert rows[0]["success_rate"] == 1.0
+    assert "evaluation_metrics" not in checkpoint.metadata
+    assert not any(run_id.startswith(f"eval_{checkpoint_id}") for run_id in snapshot.episodes_by_run)
+
+
 def test_training_service_evaluate_checkpoint_rejects_unknown_or_missing_learner_state() -> None:
     service = TrainingService(_history_registry())
 
