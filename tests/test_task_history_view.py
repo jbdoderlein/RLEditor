@@ -65,7 +65,7 @@ def test_task_history_view_supports_multi_selection_with_primary_task() -> None:
     assert view.primary_workspace_index() == 1
 
 
-def test_task_history_view_emits_edit_and_copy_requests() -> None:
+def test_task_history_view_emits_edit_copy_and_delete_requests() -> None:
     _app()
     base_task = TaskDefinition(
         environment_id="dummy_env",
@@ -85,14 +85,42 @@ def test_task_history_view_emits_edit_and_copy_requests() -> None:
 
     edited: list[int] = []
     copied: list[int] = []
+    deleted: list[list[int]] = []
     view.edit_task_requested.connect(edited.append)
     view.copy_task_requested.connect(copied.append)
+    view.delete_tasks_requested.connect(deleted.append)
 
     view.edit_task_button.click()
     view.copy_task_button.click()
+    view.delete_task_button.click()
 
     assert edited == [1]
     assert copied == [1]
+    assert deleted == [[1]]
+
+
+def test_task_history_view_delete_request_includes_multiple_selected_tasks() -> None:
+    _app()
+    base_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Main Task",
+        task_id="task_main",
+    )
+    second_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Second Task",
+        task_id="task_second",
+    )
+
+    view = TaskHistoryView()
+    view.set_tasks([base_task, second_task])
+    view.toggle_workspace_index_selection(1, emit_signal=False)
+    deleted: list[list[int]] = []
+    view.delete_tasks_requested.connect(deleted.append)
+
+    view.delete_task_button.click()
+
+    assert deleted == [[0, 1]]
 
 
 def test_task_history_view_emits_import_request() -> None:

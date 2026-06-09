@@ -335,6 +335,79 @@ def test_task_history_copy_duplicates_selected_task() -> None:
     assert copied_task.parent_task_id == "task_main"
 
 
+def test_task_history_delete_removes_multiple_selected_tasks() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    interaction_logger = _FakeInteractionLogger()
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+        interaction_logger=interaction_logger,  # type: ignore[arg-type]
+    )
+    second_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Second Task",
+        task_id="task_second",
+    )
+    third_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Third Task",
+        task_id="task_third",
+    )
+    window._add_task_to_workspace(second_task, select=False)
+    window._add_task_to_workspace(third_task, select=False)
+    window.task_history_view.set_primary_workspace_index(1, preserve_multi_selection=False, emit_signal=False)
+    window.task_history_view.toggle_workspace_index_selection(2, emit_signal=False)
+
+    window.task_history_view.delete_task_button.click()
+
+    assert [task.name for task in window._task_workspace] == ["Dummy Main Task"]
+    assert window._current_task is window._task_workspace[0]
+    assert window.task_history_view.selected_task() is window._task_workspace[0]
+    assert window.evaluation_view.selected_task().name == "Dummy Main Task"
+    assert "Deleted 2 task(s)" in window.statusBar().currentMessage()
+    assert ("task_deleted", {"deleted_count": 2}) in interaction_logger.records
+
+
+def test_task_history_delete_all_tasks_clears_selection() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+    )
+
+    window.task_history_view.delete_task_button.click()
+
+    assert window._task_workspace == []
+    assert window._current_task is None
+    assert window.task_history_view.selected_task() is None
+    assert window.evaluation_view.selected_task() is None
+    assert window.task_editor_view.name_input.text() == ""
+
+
 def test_task_import_from_generated_curriculum_adds_workspace_task_without_training() -> None:
     _app()
     registry = PluginRegistry()

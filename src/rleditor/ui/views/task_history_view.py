@@ -32,6 +32,7 @@ class TaskHistoryView(QWidget):
     import_task_requested = Signal()
     edit_task_requested = Signal(int)
     copy_task_requested = Signal(int)
+    delete_tasks_requested = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -90,8 +91,12 @@ class TaskHistoryView(QWidget):
         self.copy_task_button = QPushButton("Copy Task", right_panel)
         self.copy_task_button.setToolTip("Duplicate the selected task.")
         self.copy_task_button.setEnabled(False)
+        self.delete_task_button = QPushButton("Delete Task", right_panel)
+        self.delete_task_button.setToolTip("Delete the selected task(s) from the workspace.")
+        self.delete_task_button.setEnabled(False)
         actions_layout.addWidget(self.edit_task_button)
         actions_layout.addWidget(self.copy_task_button)
+        actions_layout.addWidget(self.delete_task_button)
 
         details_group = QGroupBox("Task Details", right_panel)
         details_layout = QFormLayout(details_group)
@@ -123,6 +128,7 @@ class TaskHistoryView(QWidget):
         self.tree_widget.currentItemChanged.connect(self._on_current_item_changed)
         self.edit_task_button.clicked.connect(self._emit_edit_selected_task)
         self.copy_task_button.clicked.connect(self._emit_copy_selected_task)
+        self.delete_task_button.clicked.connect(self._emit_delete_selected_tasks)
 
         self._render_empty_selection()
 
@@ -335,6 +341,7 @@ class TaskHistoryView(QWidget):
         self.selection_label.setText(f"Selected tasks: {len(selected_tasks)}")
         self.edit_task_button.setEnabled(True)
         self.copy_task_button.setEnabled(True)
+        self.delete_task_button.setEnabled(True)
 
         self.selection_list.clear()
         for selected_task in selected_tasks:
@@ -390,6 +397,7 @@ class TaskHistoryView(QWidget):
         self.selection_list.clear()
         self.edit_task_button.setEnabled(False)
         self.copy_task_button.setEnabled(False)
+        self.delete_task_button.setEnabled(False)
 
     def _emit_edit_selected_task(self) -> None:
         index = self.primary_workspace_index()
@@ -400,6 +408,11 @@ class TaskHistoryView(QWidget):
         index = self.primary_workspace_index()
         if index is not None:
             self.copy_task_requested.emit(index)
+
+    def _emit_delete_selected_tasks(self) -> None:
+        indexes = self.selected_workspace_indexes()
+        if indexes:
+            self.delete_tasks_requested.emit(indexes)
 
     def _workspace_index(self, item: QTreeWidgetItem) -> int | None:
         raw_value = item.data(0, _WORKSPACE_INDEX_ROLE)

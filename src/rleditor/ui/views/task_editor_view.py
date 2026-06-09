@@ -60,6 +60,13 @@ class TaskEditorView(QWidget):
         self.root_layout.addWidget(self._active_editor)
         self.root_layout.addStretch(1)
 
+    def clear_task(self) -> None:
+        self._task = None
+        self.name_input.blockSignals(True)
+        self.name_input.clear()
+        self.name_input.blockSignals(False)
+        self._clear_editor()
+
     def _clear_editor(self) -> None:
         while self.root_layout.count() > 3:
             item = self.root_layout.takeAt(3)

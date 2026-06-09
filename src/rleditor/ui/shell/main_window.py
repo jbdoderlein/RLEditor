@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         self.task_history_view.import_task_requested.connect(self._on_task_import_requested)
         self.task_history_view.edit_task_requested.connect(self._edit_task_from_history)
         self.task_history_view.copy_task_requested.connect(self._copy_task_from_history)
+        self.task_history_view.delete_tasks_requested.connect(self._delete_tasks_from_history)
         self.evaluation_view.import_task_requested.connect(self._on_task_import_requested)
         self.evaluation_view.evaluate_multiple_requested.connect(self._on_multiple_evaluation_requested)
         self.task_editor_view.task_changed.connect(self._on_task_changed)
@@ -878,6 +879,76 @@ class MainWindow(QMainWindow):
             task.derived_task_id = None
         self._add_task_to_workspace(task, select=True)
         self.statusBar().showMessage(f"Copied task: {task.name}")
+
+    def _delete_tasks_from_history(self, workspace_indexes: object) -> None:
+        if not isinstance(workspace_indexes, list | tuple | set):
+            return
+        selected_indexes = sorted(
+            {
+                int(index)
+                for index in workspace_indexes
+                if isinstance(index, int) and 0 <= index < len(self._task_workspace)
+            }
+        )
+        if not selected_indexes:
+            return
+
+        selected_index_set = set(selected_indexes)
+        current_task = self._current_task
+        deleted_tasks = [
+            task
+            for index, task in enumerate(self._task_workspace)
+            if index in selected_index_set
+        ]
+        self._task_workspace = [
+            task
+            for index, task in enumerate(self._task_workspace)
+            if index not in selected_index_set
+        ]
+
+        if not self._task_workspace:
+            self._current_task = None
+            self.task_history_view.set_tasks([])
+            self.evaluation_view.set_tasks([])
+            self.task_editor_view.clear_task()
+            deleted_count = len(deleted_tasks)
+            self.statusBar().showMessage(f"Deleted {deleted_count} task(s)")
+            self._log_interaction("task_deleted", deleted_count=deleted_count)
+            return
+
+        selected_workspace_index = self._selected_index_after_task_delete(
+            deleted_indexes=selected_indexes,
+            previous_current_task=current_task,
+            deleted_tasks=deleted_tasks,
+        )
+        self._refresh_task_history_view(
+            selected_workspace_index=selected_workspace_index,
+            preserve_multi_selection=False,
+        )
+        if selected_workspace_index is not None:
+            self._select_task_index(
+                selected_workspace_index,
+                sync_task_history=True,
+                preserve_graph_multi_selection=False,
+            )
+            self.evaluation_view.set_selected_task_index(selected_workspace_index)
+
+        deleted_count = len(deleted_tasks)
+        self.statusBar().showMessage(f"Deleted {deleted_count} task(s)")
+        self._log_interaction("task_deleted", deleted_count=deleted_count)
+
+    def _selected_index_after_task_delete(
+        self,
+        *,
+        deleted_indexes: list[int],
+        previous_current_task: TaskDefinition | None,
+        deleted_tasks: list[TaskDefinition],
+    ) -> int | None:
+        if previous_current_task is not None and previous_current_task not in deleted_tasks:
+            workspace_index = self._workspace_index_for_task(previous_current_task)
+            if workspace_index is not None:
+                return workspace_index
+        return min(deleted_indexes[0], len(self._task_workspace) - 1)
 
     def _on_task_import_requested(self) -> None:
         selected_paths, _selected_filter = QFileDialog.getOpenFileNames(
