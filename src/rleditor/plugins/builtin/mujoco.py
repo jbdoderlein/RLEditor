@@ -6,31 +6,51 @@ from typing import Any, Protocol, cast
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QComboBox, QFormLayout, QGroupBox, QLabel, QTextEdit, QVBoxLayout
+from PySide6.QtWidgets import QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QTextEdit, QVBoxLayout
 
 from rleditor.core.models import EpisodeTrace, TaskDefinition, TaskDerivationOptions
 from rleditor.plugins.base import EnvironmentPlugin, EpisodeReplayWidget
 from rleditor.plugins.builtin.mujoco_env import MujocoEnvState, MujocoExtendedEnv
 
 
-COMMON_MUJOCO_ENV_IDS = [
-    "HalfCheetah-v5",
-    "Hopper-v5",
-    "Walker2d-v5",
-    "Ant-v5",
-    "Humanoid-v5",
-    "Reacher-v5",
-    "Pusher-v5",
-    "InvertedPendulum-v5",
-    "InvertedDoublePendulum-v5",
-]
+INVERTED_DOUBLE_PENDULUM_ENV_ID = "InvertedDoublePendulum-v5"
+DEFAULT_UPRIGHT_ANGLE_THRESHOLD = 0.2
 
 
 def _ensure_mujoco_metadata(task: TaskDefinition) -> None:
+    task.config["env_id"] = INVERTED_DOUBLE_PENDULUM_ENV_ID
     task.metadata["control_type"] = "continuous"
-    task.metadata["preferred_algorithm"] = "random"
-    task.metadata["supported_algorithms"] = ["random"]
+    task.metadata["preferred_algorithm"] = "sb3_ppo"
+    task.metadata["supported_algorithms"] = ["sb3_ppo"]
     task.metadata["state_transfer"] = "best_effort_mujoco_qpos_qvel"
+    task.metadata["mujoco_env_family"] = "inverted_double_pendulum"
+    task.reward_config.setdefault("upright_angle_threshold", DEFAULT_UPRIGHT_ANGLE_THRESHOLD)
+
+
+def _initial_cart_value(task: TaskDefinition, key: str, fallback: float) -> float:
+    raw_state = task.config.get("initial_state")
+    if isinstance(raw_state, dict):
+        value = raw_state.get(key)
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return fallback
+        sequence_key = "qpos" if key == "cart_position" else "qvel"
+        sequence = raw_state.get(sequence_key)
+        if isinstance(sequence, list | tuple) and sequence:
+            try:
+                return float(sequence[0])
+            except (TypeError, ValueError):
+                return fallback
+    return fallback
+
+
+def _float_config_value(config: dict[str, object], key: str, fallback: float) -> float:
+    try:
+        return float(config.get(key, fallback))
+    except (TypeError, ValueError):
+        return fallback
 
 
 class _FrameArrayLike(Protocol):
@@ -84,21 +104,29 @@ class MujocoBackend:
     def default_task(self) -> TaskDefinition:
         return TaskDefinition(
             environment_id="mujoco",
-            name="MuJoCo HalfCheetah Default",
-            task_id="task_mujoco_half_cheetah_default",
+            name="Inverted Double Pendulum Default",
+            task_id="task_mujoco_inverted_double_pendulum_default",
             config={
-                "env_id": "HalfCheetah-v5",
+                "env_id": INVERTED_DOUBLE_PENDULUM_ENV_ID,
                 "render_mode": None,
                 "make_kwargs": {},
+                "initial_state": {
+                    "cart_position": 0.0,
+                    "cart_velocity": 0.0,
+                },
+            },
+            reward_config={
+                "upright_angle_threshold": DEFAULT_UPRIGHT_ANGLE_THRESHOLD,
             },
             metadata={
                 "control_type": "continuous",
-                "preferred_algorithm": "random",
-                "supported_algorithms": ["random"],
+                "preferred_algorithm": "sb3_ppo",
+                "supported_algorithms": ["sb3_ppo"],
                 "state_transfer": "best_effort_mujoco_qpos_qvel",
+                "mujoco_env_family": "inverted_double_pendulum",
                 "notes": (
-                    "This adapter exposes Gymnasium MuJoCo envs and simulator state hooks. "
-                    "The current tabular Q-learning runner is not a valid learner for this task."
+                    "This adapter exposes Gymnasium InvertedDoublePendulum-v5 and simulator state hooks. "
+                    "Use a continuous-control learner such as Stable-Baselines3 PPO."
                 ),
             },
         )
@@ -323,7 +351,7 @@ class MujocoTaskEditorWidget(QGroupBox):
         task: TaskDefinition,
         on_task_changed: Callable[[TaskDefinition], None],
     ) -> None:
-        super().__init__("MuJoCo Task")
+        super().__init__("Inverted Double Pendulum Task")
         self._task = task
         self._on_task_changed = on_task_changed
         _ensure_mujoco_metadata(self._task)
@@ -331,35 +359,81 @@ class MujocoTaskEditorWidget(QGroupBox):
         root = QVBoxLayout(self)
 
         notice = QLabel(
-            "Minimal backend-only MuJoCo setup. Training uses random continuous actions for now; "
-            "install gymnasium[mujoco] to create real MuJoCo envs.",
+            "InvertedDoublePendulum-v5 training uses Stable-Baselines3 PPO by default. "
+            "Install gymnasium[mujoco] to create real MuJoCo envs.",
             self,
         )
         notice.setWordWrap(True)
         notice.setObjectName("SubtitleLabel")
 
-        form_group = QGroupBox("Gymnasium Environment", self)
+        form_group = QGroupBox("Task Configuration", self)
         form = QFormLayout(form_group)
-        self.env_id_combo = QComboBox(form_group)
-        self.env_id_combo.setEditable(True)
-        self.env_id_combo.addItems(COMMON_MUJOCO_ENV_IDS)
-        self.env_id_combo.setCurrentText(str(self._task.config.get("env_id", "HalfCheetah-v5")))
-        self.env_id_combo.currentTextChanged.connect(self._on_env_id_changed)
-        form.addRow("Env ID", self.env_id_combo)
+        self.env_label = QLabel(INVERTED_DOUBLE_PENDULUM_ENV_ID, form_group)
+        self.env_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
-        self.algorithm_label = QLabel("random continuous-action sampling", form_group)
-        self.algorithm_label.setWordWrap(True)
-        form.addRow("Current policy", self.algorithm_label)
+        self.cart_position_spin = self._spin_box(
+            value=_initial_cart_value(self._task, "cart_position", 0.0),
+            minimum=-10.0,
+            maximum=10.0,
+            step=0.05,
+            parent=form_group,
+        )
+        self.cart_velocity_spin = self._spin_box(
+            value=_initial_cart_value(self._task, "cart_velocity", 0.0),
+            minimum=-10.0,
+            maximum=10.0,
+            step=0.05,
+            parent=form_group,
+        )
+        self.upright_threshold_spin = self._spin_box(
+            value=_float_config_value(
+                self._task.reward_config,
+                "upright_angle_threshold",
+                DEFAULT_UPRIGHT_ANGLE_THRESHOLD,
+            ),
+            minimum=0.01,
+            maximum=3.14,
+            step=0.01,
+            parent=form_group,
+        )
+
+        self.cart_position_spin.valueChanged.connect(self._on_task_field_changed)
+        self.cart_velocity_spin.valueChanged.connect(self._on_task_field_changed)
+        self.upright_threshold_spin.valueChanged.connect(self._on_task_field_changed)
+
+        form.addRow("Env ID", self.env_label)
+        form.addRow("Initial cart position", self.cart_position_spin)
+        form.addRow("Initial cart velocity", self.cart_velocity_spin)
+        form.addRow("Upright angle threshold", self.upright_threshold_spin)
 
         root.addWidget(notice)
         root.addWidget(form_group)
 
-    def _on_env_id_changed(self, value: str) -> None:
-        env_id = value.strip()
-        if not env_id:
-            return
+    def _spin_box(
+        self,
+        *,
+        value: float,
+        minimum: float,
+        maximum: float,
+        step: float,
+        parent: QGroupBox,
+    ) -> QDoubleSpinBox:
+        spin_box = QDoubleSpinBox(parent)
+        spin_box.setRange(minimum, maximum)
+        spin_box.setDecimals(3)
+        spin_box.setSingleStep(step)
+        spin_box.setValue(value)
+        return spin_box
+
+    def _on_task_field_changed(self) -> None:
         self._task.config = deepcopy(self._task.config)
-        self._task.config["env_id"] = env_id
+        self._task.config["env_id"] = INVERTED_DOUBLE_PENDULUM_ENV_ID
+        self._task.config["initial_state"] = {
+            "cart_position": self.cart_position_spin.value(),
+            "cart_velocity": self.cart_velocity_spin.value(),
+        }
+        self._task.reward_config = deepcopy(self._task.reward_config)
+        self._task.reward_config["upright_angle_threshold"] = self.upright_threshold_spin.value()
         _ensure_mujoco_metadata(self._task)
         self._on_task_changed(self._task)
 
@@ -379,8 +453,8 @@ class MujocoGuiExtension:
 def build_mujoco_plugin() -> EnvironmentPlugin:
     return EnvironmentPlugin(
         plugin_id="mujoco",
-        display_name="MuJoCo",
-        description="Continuous-control Gymnasium MuJoCo environments with best-effort simulator state export/import.",
+        display_name="Inverted Double Pendulum",
+        description="Gymnasium InvertedDoublePendulum-v5 with configurable cart start and upright threshold.",
         backend=MujocoBackend(),
         gui_extension=MujocoGuiExtension(),
     )

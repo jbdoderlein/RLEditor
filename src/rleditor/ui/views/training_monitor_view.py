@@ -435,6 +435,15 @@ class TrainingMonitorView(QWidget):
             ],
         )
 
+    def set_algorithm_hint(self, algorithm: object) -> None:
+        if algorithm is None:
+            return
+
+        algorithm_key = str(algorithm)
+        index = self.algorithm_combo.findData(algorithm_key)
+        if index >= 0:
+            self.algorithm_combo.setCurrentIndex(index)
+
     def set_config(self, config: RunConfig) -> None:
         algorithm_index = self.algorithm_combo.findData(config.algorithm)
         if algorithm_index >= 0:

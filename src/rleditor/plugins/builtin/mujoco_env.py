@@ -10,9 +10,13 @@ from typing import Any
 os.environ.setdefault("MUJOCO_GL", "egl")
 
 import gymnasium as gym
+from gymnasium import error as gym_error
 import numpy as np
 
 from rleditor.core.models import TaskDefinition, TaskSnapshot
+
+INVERTED_DOUBLE_PENDULUM_ENV_ID = "InvertedDoublePendulum-v5"
+DEFAULT_UPRIGHT_ANGLE_THRESHOLD = 0.2
 
 
 def _to_serializable(value: Any) -> Any:
@@ -46,6 +50,15 @@ def _optional_float_list(value: Any) -> list[float] | None:
 
 def _float_array(value: Any):
     return np.asarray(_float_list(value), dtype=np.float64)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _assign_sequence(target: Any, values: list[float]) -> None:
@@ -104,6 +117,10 @@ class MujocoExtendedEnv(gym.Wrapper):
         self._render_mode = render_mode if render_mode is not None else self._task.config.get("render_mode")
         self._last_action: Any | None = None
         self._terminated = False
+        self._env_id = str(self._task.config.get("env_id", INVERTED_DOUBLE_PENDULUM_ENV_ID))
+        self._upright_angle_threshold = _optional_float(
+            self._task.reward_config.get("upright_angle_threshold", DEFAULT_UPRIGHT_ANGLE_THRESHOLD)
+        )
         env = self._build_env(self._task, render_mode=self._render_mode)
         super().__init__(env)
 
@@ -146,9 +163,7 @@ class MujocoExtendedEnv(gym.Wrapper):
 
         self._last_action = None
         self._terminated = False
-        initial_state = self._coerce_optional_initial_state(self._task.config.get("initial_state"))
-        if initial_state is not None:
-            self.import_state(initial_state)
+        if self._apply_initial_state_override(self._task.config.get("initial_state")):
             observation = self._current_observation(fallback=observation)
             info = dict(info)
             info["initial_state_override"] = True
@@ -161,6 +176,12 @@ class MujocoExtendedEnv(gym.Wrapper):
         else:
             observation, reward, terminated, info = result
             truncated = False
+
+        info = dict(info)
+        reward = float(reward)
+        terminated = bool(terminated)
+        if self._uses_custom_upright_threshold():
+            self._annotate_upright_threshold(info)
 
         self._last_action = _to_serializable(action)
         self._terminated = bool(terminated) or bool(truncated)
@@ -212,7 +233,7 @@ class MujocoExtendedEnv(gym.Wrapper):
         return MujocoExtendedEnv(self._task, render_mode=target_render_mode)
 
     def _build_env(self, task: TaskDefinition, *, render_mode: str | None) -> gym.Env:
-        env_id = str(task.config.get("env_id", "HalfCheetah-v5"))
+        env_id = str(task.config.get("env_id", INVERTED_DOUBLE_PENDULUM_ENV_ID))
         make_kwargs = task.config.get("make_kwargs", {})
         if not isinstance(make_kwargs, dict):
             make_kwargs = {}
@@ -220,7 +241,14 @@ class MujocoExtendedEnv(gym.Wrapper):
         kwargs = dict(make_kwargs)
         if render_mode is not None:
             kwargs["render_mode"] = render_mode
-        return gym.make(env_id, **kwargs)
+        try:
+            return gym.make(env_id, **kwargs)
+        except gym_error.DependencyNotInstalled as exc:
+            msg = (
+                "MuJoCo is not installed. Install it with `uv sync --extra mujoco` "
+                "or `uv pip install 'gymnasium[mujoco]'`."
+            )
+            raise RuntimeError(msg) from exc
 
     def _ensure_base_env_state(self) -> object:
         base_env = getattr(self, "unwrapped", self)
@@ -251,6 +279,70 @@ class MujocoExtendedEnv(gym.Wrapper):
             return None
         if isinstance(state, MujocoEnvState):
             return state
-        if isinstance(state, dict):
+        if isinstance(state, dict) and "qpos" in state and "qvel" in state:
             return MujocoEnvState.from_dict(state)
         return None
+
+    def _apply_initial_state_override(self, state: object) -> bool:
+        resolved_state = self._coerce_optional_initial_state(state)
+        if resolved_state is not None:
+            self.import_state(resolved_state)
+            return True
+
+        if not isinstance(state, dict):
+            return False
+
+        cart_position = _optional_float(state.get("cart_position"))
+        cart_velocity = _optional_float(state.get("cart_velocity"))
+        if cart_position is None and cart_velocity is None:
+            return False
+
+        current_state = self.export_state()
+        qpos = list(current_state.qpos)
+        qvel = list(current_state.qvel)
+        if cart_position is not None and qpos:
+            qpos[0] = cart_position
+        if cart_velocity is not None and qvel:
+            qvel[0] = cart_velocity
+        self.import_state(
+            MujocoEnvState(
+                qpos=qpos,
+                qvel=qvel,
+                time=current_state.time,
+                ctrl=current_state.ctrl,
+                observation=current_state.observation,
+                last_action=current_state.last_action,
+                terminated=current_state.terminated,
+            )
+        )
+        return True
+
+    def _uses_custom_upright_threshold(self) -> bool:
+        return self._env_id == INVERTED_DOUBLE_PENDULUM_ENV_ID and self._upright_angle_threshold is not None
+
+    def _annotate_upright_threshold(self, info: dict[str, Any]) -> None:
+        threshold = self._upright_angle_threshold
+        if threshold is None:
+            return
+
+        angles = self._current_pole_angles()
+        if angles is None:
+            return
+
+        info["upright_angle_threshold"] = threshold
+        info["upright_angle_healthy"] = all(abs(angle) < threshold for angle in angles)
+        info["upright_angles"] = _to_serializable(angles)
+
+    def _current_pole_angles(self) -> list[float] | None:
+        base_env = getattr(self, "unwrapped", self)
+        data = getattr(base_env, "data", None)
+        qpos = getattr(data, "qpos", None)
+        if qpos is None:
+            return None
+        try:
+            values = _float_list(qpos)
+        except ValueError:
+            return None
+        if len(values) < 3:
+            return None
+        return values[1:3]

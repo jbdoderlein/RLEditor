@@ -72,8 +72,49 @@ class _FakeMujocoEnv(gym.Env):
         return frame
 
 
+class _FakeInvertedDoublePendulumEnv(gym.Env):
+    metadata = {"render_modes": []}
+
+    def __init__(self, env_id: str, kwargs: dict[str, object]) -> None:
+        super().__init__()
+        self.env_id = env_id
+        self.kwargs = kwargs
+        self.action_space = Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+        self.observation_space = Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float32)
+        self.data = SimpleNamespace(
+            qpos=np.array([0.0, 0.1, -0.1], dtype=np.float64),
+            qvel=np.array([0.0, 0.0, 0.0], dtype=np.float64),
+            ctrl=np.array([0.0], dtype=np.float64),
+            time=0.0,
+        )
+
+    def reset(self, *, seed: int | None = None, options: dict[str, object] | None = None):
+        _ = seed, options
+        self.data.qpos[:] = [0.0, 0.1, -0.1]
+        self.data.qvel[:] = [0.0, 0.0, 0.0]
+        self.data.ctrl[:] = [0.0]
+        self.data.time = 0.0
+        return self._get_obs(), {}
+
+    def step(self, action):
+        self.data.ctrl[:] = action
+        self.data.time += 0.01
+        return self._get_obs(), 10.0, False, False, {"reward_survive": 10.0}
+
+    def set_state(self, qpos, qvel) -> None:
+        assert qpos.shape == (3,)
+        assert qvel.shape == (3,)
+        self.data.qpos[:] = qpos
+        self.data.qvel[:] = qvel
+
+    def _get_obs(self):
+        return np.concatenate([self.data.qpos, self.data.qvel, np.zeros(3, dtype=np.float64)])
+
+
 def _patch_gym_make(monkeypatch) -> None:
     def fake_make(env_id: str, **kwargs):
+        if env_id == "InvertedDoublePendulum-v5":
+            return _FakeInvertedDoublePendulumEnv(env_id, kwargs)
         return _FakeMujocoEnv(env_id, kwargs)
 
     monkeypatch.setattr(mujoco_env.gym, "make", fake_make)
@@ -158,24 +199,65 @@ def test_mujoco_backend_is_registered_without_requiring_mujoco_install() -> None
     plugin = registry.get_environment_plugin("mujoco")
     task = MujocoBackend().default_task()
 
-    assert plugin.display_name == "MuJoCo"
+    assert plugin.display_name == "Inverted Double Pendulum"
     assert plugin.gui_extension is not None
     assert task.environment_id == "mujoco"
+    assert task.config["env_id"] == "InvertedDoublePendulum-v5"
+    assert task.reward_config["upright_angle_threshold"] == 0.2
     assert task.metadata["control_type"] == "continuous"
 
 
-def test_mujoco_task_editor_updates_env_id_and_keeps_random_policy_metadata() -> None:
+def test_mujoco_task_editor_updates_inverted_double_pendulum_fields() -> None:
     _app()
     task = MujocoBackend().default_task()
     changed: list[TaskDefinition] = []
     widget = MujocoTaskEditorWidget(task, changed.append)
 
-    widget.env_id_combo.setCurrentText("Ant-v5")
+    widget.cart_position_spin.setValue(1.25)
+    widget.cart_velocity_spin.setValue(-0.75)
+    widget.upright_threshold_spin.setValue(0.35)
 
     assert changed
-    assert task.config["env_id"] == "Ant-v5"
-    assert task.metadata["preferred_algorithm"] == "random"
-    assert widget.algorithm_label.text() == "random continuous-action sampling"
+    assert task.config["env_id"] == "InvertedDoublePendulum-v5"
+    assert task.config["initial_state"] == {
+        "cart_position": 1.25,
+        "cart_velocity": -0.75,
+    }
+    assert task.reward_config["upright_angle_threshold"] == 0.35
+    assert task.metadata["preferred_algorithm"] == "sb3_ppo"
+    assert task.metadata["supported_algorithms"] == ["sb3_ppo"]
+
+
+def test_mujoco_extended_env_can_start_from_cart_position_and_velocity(monkeypatch) -> None:
+    _patch_gym_make(monkeypatch)
+    task = MujocoBackend().default_task()
+    task.config["initial_state"] = {
+        "cart_position": 1.25,
+        "cart_velocity": -0.75,
+    }
+
+    env = MujocoExtendedEnv(task)
+    observation, info = env.reset(seed=11)
+
+    assert info["initial_state_override"] is True
+    assert observation.tolist()[:6] == [1.25, 0.1, -0.1, -0.75, 0.0, 0.0]
+
+
+def test_mujoco_extended_env_reports_upright_angle_threshold_without_terminating(monkeypatch) -> None:
+    _patch_gym_make(monkeypatch)
+    task = MujocoBackend().default_task()
+    task.reward_config["upright_angle_threshold"] = 0.05
+
+    env = MujocoExtendedEnv(task)
+    env.reset(seed=11)
+    _observation, reward, terminated, truncated, info = env.step(np.array([0.0], dtype=np.float32))
+
+    assert reward == 10.0
+    assert terminated is False
+    assert truncated is False
+    assert info["reward_survive"] == 10.0
+    assert info["upright_angle_threshold"] == 0.05
+    assert info["upright_angle_healthy"] is False
 
 
 def test_mujoco_replay_widget_renders_frame_and_simulator_state(monkeypatch) -> None:

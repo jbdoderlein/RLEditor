@@ -563,10 +563,13 @@ class TrainingRunner(QObject):
             candidate_env = self._env_factory(self._task)
         except Exception as exc:
             self._env = None
+            detail = str(exc).strip()
             msg = (
                 f"Cannot create environment '{self._task.environment_id}' "
                 f"for task '{self._task.name}'."
             )
+            if detail:
+                msg = f"{msg} {detail}"
             raise RuntimeError(msg) from exc
 
         if not self._is_env_compatible(candidate_env):
@@ -731,9 +734,22 @@ class TrainingRunner(QObject):
             return self._random.choice(best_actions) if best_actions else 0
 
         if action_space is not None and hasattr(action_space, "sample"):
-            return action_space.sample()
+            try:
+                sampled_action = action_space.sample()
+            except Exception:
+                return 0
+            if action_count is not None and not self._is_discrete_action(sampled_action, action_count):
+                return 0
+            return sampled_action
 
         return 0
+
+    def _is_discrete_action(self, action: Any, action_count: int) -> bool:
+        try:
+            value = int(action)
+        except (TypeError, ValueError):
+            return False
+        return 0 <= value < action_count
 
     def _normalize_action(self, action: Any) -> Any:
         if action is None or isinstance(action, (str, int, float, bool)):
