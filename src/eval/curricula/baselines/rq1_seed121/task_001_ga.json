@@ -1,0 +1,158 @@
+{
+  "curriculum": {
+    "size": 3,
+    "steps": [
+      {
+        "env_id": 0,
+        "algorithm": "q_learning",
+        "max_episodes": 1000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 1,
+        "algorithm": "q_learning",
+        "max_episodes": 1000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 2,
+        "algorithm": "q_learning",
+        "max_episodes": 1000,
+        "max_episode_length": 100
+      }
+    ]
+  },
+  "environments": [
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 0,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - GA Baseline - Step 01/03",
+      "metadata": {
+        "curriculum_role": "rq1_ga_intermediate",
+        "curriculum_step": 1,
+        "curriculum_steps": 3,
+        "hole_count": 4,
+        "hole_density": 0.027778,
+        "target_hole_density": 0.1,
+        "baseline_type": "ga",
+        "ga_complexity": null
+      },
+      "task_config": {
+        "hole_probability": 0.027778,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFHFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFHFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFHFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFHFFFF",
+          "FFFFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 1,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - GA Baseline - Step 02/03",
+      "metadata": {
+        "curriculum_role": "rq1_ga_intermediate",
+        "curriculum_step": 2,
+        "curriculum_steps": 3,
+        "hole_count": 13,
+        "hole_density": 0.090278,
+        "target_hole_density": 0.1,
+        "baseline_type": "ga",
+        "ga_complexity": 0.3096735994878671
+      },
+      "task_config": {
+        "hole_probability": 0.090278,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFHFFFF",
+          "FFFHFFFFFFFH",
+          "FFFFFFFFFFHF",
+          "FFFFFFFFFFHF",
+          "HFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFHFFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFFFFFHFFFFF",
+          "FHFHFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFHFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 2,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - GA Baseline - Step 03/03 (Target)",
+      "metadata": {
+        "curriculum_role": "rq1_target",
+        "curriculum_step": 3,
+        "curriculum_steps": 3,
+        "hole_count": 14,
+        "hole_density": 0.097222,
+        "target_hole_density": 0.1,
+        "baseline_type": "ga",
+        "ga_complexity": 0.343134885235181
+      },
+      "task_config": {
+        "hole_probability": 0.097222,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFHFFFF",
+          "FFFHFFFFFFFH",
+          "FFFFFFFFFFHF",
+          "FFFFFFFFFFHF",
+          "HFFFFFFFHFFF",
+          "FFFFFFFFFFFF",
+          "FFHFFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFFFFFHFFFFF",
+          "FHFHFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFHFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    }
+  ],
+  "evaluation": {
+    "evaluation_env": 2,
+    "eval_episodes": 100,
+    "max_episode_length": 100
+  }
+}
