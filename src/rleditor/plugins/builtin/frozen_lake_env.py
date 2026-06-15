@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import math
 from numbers import Integral
 from typing import Any, cast
 
@@ -33,12 +34,13 @@ TILE_FROZEN = "F"
 TILE_HOLE = "H"
 TILE_GOAL = "G"
 VALID_TILES = {TILE_START, TILE_FROZEN, TILE_HOLE, TILE_GOAL}
+DEFAULT_SUCCESS_RATE = 1.0 / 3.0
 
 
 def _default_reward_config() -> dict[str, float]:
     return {
         "tile:F": 0.0,
-        "tile:H": -1.0,
+        "tile:H": 0.0,
         "tile:S": 0.0,
         "tile:G": 1.0,
     }
@@ -76,8 +78,23 @@ def _map_from_task_config(config: dict[str, object], *, fallback_size: int = 4) 
 
 
 def _generate_random_map_desc(size: int, hole_probability: float) -> list[str]:
-    p_frozen = max(0.1, min(0.95, 1.0 - hole_probability))
-    return [str(row) for row in generate_random_map(size=size, p=p_frozen)]
+    if not 0.0 <= hole_probability < 1.0:
+        raise ValueError("Frozen Lake hole_probability must be in [0, 1)")
+    return [str(row) for row in generate_random_map(size=size, p=1.0 - hole_probability)]
+
+
+def _parse_success_rate(value: object, *, fallback: float = DEFAULT_SUCCESS_RATE) -> float:
+    if value is None:
+        return fallback
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Frozen Lake success_rate must be a number in [0, 1]") from exc
+
+    if not math.isfinite(numeric) or not 0.0 <= numeric <= 1.0:
+        raise ValueError("Frozen Lake success_rate must be a finite number in [0, 1]")
+    return numeric
 
 
 def _normalize_map_desc(raw_map: list[str], expected_size: int | None = None) -> list[list[str]]:
@@ -401,11 +418,15 @@ class FrozenLakeExtendedEnv(gym.Wrapper):
 
     def _build_wrapped_env(self, task: TaskDefinition, *, render_mode: str | None) -> gym.Env:
         map_rows = _map_from_task_config(task.config)
+        success_rate = _parse_success_rate(task.config.get("success_rate"))
         env = gym.make(
             "FrozenLake-v1",
             desc=map_rows,
             is_slippery=bool(task.config.get("is_slippery", True)),
+            success_rate=success_rate,
             render_mode=render_mode,
+            # Keep episode limits explicit in RunConfig instead of Gymnasium's hidden default TimeLimit(100).
+            max_episode_steps=-1,
         )
 
         wrapped_env: gym.Env = FrozenLakeRewardWrapper(env, task.reward_config)

@@ -22,6 +22,13 @@ from rleditor.core.models import (
     TrainingMetrics,
     TrainingStatus,
 )
+from rleditor.infra.stable_baselines_backend import (
+    StableBaselines3StepCallback,
+    StableBaselines3TraceWrapper,
+    create_stable_baselines3_model,
+    export_stable_baselines3_learner_state,
+    is_stable_baselines3_algorithm,
+)
 
 
 class TrainingRunner(QObject):
@@ -62,6 +69,10 @@ class TrainingRunner(QObject):
         self._episode_seed: int | None = None
         self._record_current_episode_trace = False
         self._q_values: dict[tuple[str, int], float] = {}
+        self._sb3_model: Any | None = None
+        self._sb3_trace_env: StableBaselines3TraceWrapper | None = None
+        self._pending_sb3_learner_state: dict[str, Any] | None = None
+        self._sb3_pending_finish_status: TrainingStatus | None = None
         self._last_metrics_emitted_at = 0.0
         self._auto_run = False
         self._stop_requested = threading.Event()
@@ -96,6 +107,10 @@ class TrainingRunner(QObject):
         self._episode_seed = None
         self._record_current_episode_trace = False
         self._q_values = {}
+        self._sb3_model = None
+        self._sb3_trace_env = None
+        self._pending_sb3_learner_state = None
+        self._sb3_pending_finish_status = None
         self._restore_checkpoint_state(initial_checkpoint)
         if config.seed is not None:
             self._random.seed(config.seed)
@@ -211,8 +226,113 @@ class TrainingRunner(QObject):
             msg = "Training environment is not available; cannot step runner."
             raise RuntimeError(msg)
 
+        if is_stable_baselines3_algorithm(self._config.algorithm):
+            self._on_tick_stable_baselines3(emit_metrics=emit_metrics)
+            return True
+
         self._on_tick_gym(emit_metrics=emit_metrics)
         return True
+
+    def _on_tick_stable_baselines3(self, *, emit_metrics: bool = True) -> None:
+        if self._sb3_model is None or self._sb3_trace_env is None:
+            msg = "Stable-Baselines3 model is not available; cannot step runner."
+            raise RuntimeError(msg)
+
+        max_steps = self._config.max_steps
+        remaining_steps = None if max_steps is None else max_steps - self._metrics.step
+        if remaining_steps is not None and remaining_steps <= 0:
+            self._finish_run(TrainingStatus.FINISHED)
+            return
+
+        chunk_steps = self._stable_baselines3_chunk_steps()
+        if remaining_steps is not None:
+            chunk_steps = min(chunk_steps, remaining_steps)
+
+        started_at = time.perf_counter()
+        start_step = self._metrics.step
+        callback = StableBaselines3StepCallback(self._on_stable_baselines3_step)
+        self._sb3_model.learn(
+            total_timesteps=chunk_steps,
+            reset_num_timesteps=False,
+            callback=callback.callback,
+            progress_bar=False,
+        )
+        self._drain_stable_baselines3_episodes()
+
+        elapsed = max(time.perf_counter() - started_at, 1e-6)
+        processed_steps = max(0, self._metrics.step - start_step)
+        if processed_steps > 0:
+            self._metrics.fps = processed_steps / elapsed
+
+        if emit_metrics:
+            self._emit_metrics_updated()
+
+        if self._sb3_pending_finish_status is not None:
+            status = self._sb3_pending_finish_status
+            self._sb3_pending_finish_status = None
+            self._finish_run(status)
+
+    def _on_stable_baselines3_step(self, model: Any) -> bool:
+        if self._status != TrainingStatus.RUNNING or self._stop_requested.is_set():
+            return False
+
+        self._metrics.step += 1
+        exploration_rate = getattr(model, "exploration_rate", None)
+        if exploration_rate is not None:
+            try:
+                self._metrics.exploration_rate = float(exploration_rate)
+            except (TypeError, ValueError):
+                pass
+        self._metrics.value_loss = None
+        self._metrics.policy_loss = None
+
+        self._drain_stable_baselines3_episodes()
+
+        if self._config.max_steps is not None and self._metrics.step >= self._config.max_steps:
+            self._sb3_pending_finish_status = TrainingStatus.FINISHED
+            return False
+
+        if (
+            self._config.max_duration_seconds is not None
+            and (time.perf_counter() - self._started_at) >= self._config.max_duration_seconds
+        ):
+            self._sb3_pending_finish_status = TrainingStatus.FINISHED
+            return False
+
+        if self._evaluate_breakpoints(defer_stop=True):
+            return False
+        return True
+
+    def _drain_stable_baselines3_episodes(self) -> None:
+        trace_env = self._sb3_trace_env
+        if trace_env is None:
+            return
+
+        for summary in trace_env.drain_episode_summaries():
+            self._metrics.episode += 1
+            self._metrics.cumulative_reward += summary.total_reward
+            self._episode_rewards.append(summary.total_reward)
+            self._episode_lengths.append(summary.length)
+            self._episode_successes.append(1 if summary.success else 0)
+
+            self._metrics.episode_reward_mean = sum(self._episode_rewards) / len(self._episode_rewards)
+            self._metrics.mean_reward = self._metrics.episode_reward_mean
+            self._metrics.episode_length_mean = sum(self._episode_lengths) / len(self._episode_lengths)
+            self._metrics.success_rate = sum(self._episode_successes) / len(self._episode_successes)
+
+            if self._config.max_episodes is not None and self._metrics.episode >= self._config.max_episodes:
+                self._sb3_pending_finish_status = TrainingStatus.FINISHED
+
+        for trace in trace_env.drain_traces():
+            self.episode_captured.emit(trace)
+
+    def _stable_baselines3_chunk_steps(self) -> int:
+        raw_value = self._config.hyperparameters.get("sb3_train_chunk_steps", 64)
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            value = 64
+        return max(1, value)
 
     def _on_tick_gym(self, *, emit_metrics: bool = True) -> None:
         env = self._env
@@ -235,13 +355,10 @@ class TrainingRunner(QObject):
         self._metrics.step += 1
         self._metrics.fps = 1.0 / elapsed
 
-        max_steps = self._config.max_steps
-        progress = 0.0 if max_steps is None else min(1.0, self._metrics.step / max(max_steps, 1))
-        exploration_floor = 0.02
-        self._metrics.exploration_rate = max(
-            exploration_floor,
-            self._config.epsilon * (1.0 - progress),
-        )
+        if self._config.algorithm == "q_learning":
+            self._metrics.exploration_rate = self._q_learning_exploration_rate()
+        else:
+            self._metrics.exploration_rate = 0.0
 
         action = self._select_action(previous_observation, env)
         normalized_action = self._normalize_action(action)
@@ -310,6 +427,7 @@ class TrainingRunner(QObject):
         self._observation = normalized_observation
 
         self._metrics.reward_step = reward_value
+        self._metrics.cumulative_reward += reward_value
 
         if self._config.algorithm == "q_learning":
             self._update_q_learning(
@@ -465,6 +583,27 @@ class TrainingRunner(QObject):
             )
             raise RuntimeError(msg)
 
+        if (
+            self._config.algorithm == "q_learning"
+            and self._action_space_size(getattr(candidate_env, "action_space", None)) is None
+        ):
+            try:
+                close = getattr(candidate_env, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass
+            self._env = None
+            msg = (
+                f"Cannot start Q-learning for task '{self._task.name}': "
+                "Q-learning requires a discrete action_space.n."
+            )
+            raise RuntimeError(msg)
+
+        if is_stable_baselines3_algorithm(self._config.algorithm):
+            self._connect_stable_baselines3_environment_or_raise(candidate_env)
+            return
+
         self._env = candidate_env
         self._reset_environment()
         if self._observation is None:
@@ -474,6 +613,40 @@ class TrainingRunner(QObject):
                 "could not be reset."
             )
             raise RuntimeError(msg)
+
+    def _connect_stable_baselines3_environment_or_raise(self, env: Any) -> None:
+        assert self._task is not None
+        trace_env = StableBaselines3TraceWrapper(
+            env,
+            task=self._task,
+            config=self._config,
+            run_id=self._run_id,
+            trace_random=self._trace_random,
+        )
+        try:
+            model = create_stable_baselines3_model(
+                algorithm=self._config.algorithm,
+                env=trace_env,
+                config=self._config,
+                learner_state=self._pending_sb3_learner_state,
+            )
+        except Exception as exc:
+            try:
+                trace_env.close()
+            except Exception:
+                pass
+            self._env = None
+            self._sb3_trace_env = None
+            self._sb3_model = None
+            msg = (
+                f"Cannot initialize Stable-Baselines3 algorithm '{self._config.algorithm}' "
+                f"for task '{self._task.name}'."
+            )
+            raise RuntimeError(msg) from exc
+
+        self._env = trace_env
+        self._sb3_trace_env = trace_env
+        self._sb3_model = model
 
     def _is_env_compatible(self, env: Any) -> bool:
         return (
@@ -546,14 +719,16 @@ class TrainingRunner(QObject):
                 return self._random.randrange(action_count)
 
             state_key = self._state_key(observation)
-            best_action = 0
             best_q = float("-inf")
+            best_actions: list[int] = []
             for action in range(action_count):
                 q_value = self._q_values.get((state_key, action), 0.0)
                 if q_value > best_q:
                     best_q = q_value
-                    best_action = action
-            return best_action
+                    best_actions = [action]
+                elif q_value == best_q:
+                    best_actions.append(action)
+            return self._random.choice(best_actions) if best_actions else 0
 
         if action_space is not None and hasattr(action_space, "sample"):
             return action_space.sample()
@@ -578,6 +753,46 @@ class TrainingRunner(QObject):
         if isinstance(action, list):
             return [self._normalize_action(item) for item in action]
         return repr(action)
+    def _q_learning_exploration_rate(self) -> float:
+        epsilon = max(0.0, min(1.0, float(self._config.epsilon)))
+        epsilon_min = self._q_learning_hyperparameter_float(
+            "epsilon_min",
+            0.02 if epsilon > 0.0 else 0.0,
+        )
+        epsilon_min = max(0.0, min(epsilon, epsilon_min))
+        completed_steps = max(0, self._metrics.step - 1)
+
+        epsilon_decay = self._q_learning_hyperparameter_float("epsilon_decay", None)
+        if epsilon_decay is not None:
+            epsilon_decay = max(0.0, min(1.0, epsilon_decay))
+            exploration_rate = epsilon * (epsilon_decay ** completed_steps)
+            return max(epsilon_min, exploration_rate)
+
+        max_episodes = self._config.max_episodes
+        if max_episodes is not None:
+            if max_episodes <= 1:
+                return max(epsilon_min, epsilon)
+            progress = min(
+                1.0,
+                max(0, self._metrics.episode) / max(max_episodes - 1, 1),
+            )
+            return max(epsilon_min, epsilon * (1.0 - progress))
+
+        max_steps = self._config.max_steps
+        if max_steps is None or max_steps <= 1:
+            return max(epsilon_min, epsilon)
+
+        progress = min(1.0, completed_steps / max(max_steps - 1, 1))
+        return max(epsilon_min, epsilon * (1.0 - progress))
+
+    def _q_learning_hyperparameter_float(self, key: str, default: float | None) -> float | None:
+        raw_value = self._config.hyperparameters.get(key)
+        if raw_value is None:
+            return default
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            return default
 
     def _update_q_learning(
         self,
@@ -684,6 +899,11 @@ class TrainingRunner(QObject):
             return None
 
     def export_learner_state(self) -> dict[str, Any]:
+        if is_stable_baselines3_algorithm(self._config.algorithm):
+            return export_stable_baselines3_learner_state(
+                self._sb3_model,
+                algorithm=self._config.algorithm,
+            )
         if self._config.algorithm != "q_learning":
             return {}
         return {
@@ -707,6 +927,9 @@ class TrainingRunner(QObject):
             return
         if learner_state.get("algorithm") != self._config.algorithm:
             return
+        if is_stable_baselines3_algorithm(self._config.algorithm):
+            self._pending_sb3_learner_state = learner_state
+            return
         if self._config.algorithm != "q_learning":
             return
 
@@ -728,7 +951,7 @@ class TrainingRunner(QObject):
 
         self._q_values = restored
 
-    def _evaluate_breakpoints(self) -> bool:
+    def _evaluate_breakpoints(self, *, defer_stop: bool = False) -> bool:
         if not self._config.breakpoints:
             return False
 
@@ -747,7 +970,10 @@ class TrainingRunner(QObject):
                 self.breakpoint_triggered.emit(event)
                 actions = set(rule.actions)
                 if "stop" in actions:
-                    self._finish_run(TrainingStatus.STOPPED)
+                    if defer_stop:
+                        self._sb3_pending_finish_status = TrainingStatus.STOPPED
+                    else:
+                        self._finish_run(TrainingStatus.STOPPED)
                     return True
                 if "pause" in actions:
                     self._set_status(TrainingStatus.PAUSED)

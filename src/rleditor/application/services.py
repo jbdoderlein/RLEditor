@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 import re
+from typing import Any
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, Signal
@@ -22,6 +23,7 @@ from rleditor.core.models import (
     TrainingRun,
     TrainingStatus,
 )
+from rleditor.infra.evaluation_runner import EvaluationResult, evaluate_policy
 from rleditor.infra.training_runner import TrainingRunner
 from rleditor.plugins.registry import PluginRegistry
 
@@ -194,6 +196,232 @@ class TrainingService(QObject):
         self._run_task_snapshots = deepcopy(snapshot.run_task_snapshots)
         self._checkpoint_counter = self._next_checkpoint_counter_floor()
         self.history_changed.emit()
+
+    def import_checkpoint(self, checkpoint: Checkpoint) -> Checkpoint:
+        if self._has_live_runs():
+            msg = "Cannot import a checkpoint while training is active."
+            raise RuntimeError(msg)
+
+        imported_checkpoint = deepcopy(checkpoint)
+        original_checkpoint_id = imported_checkpoint.checkpoint_id
+        if not original_checkpoint_id or self._checkpoint_id_exists(original_checkpoint_id):
+            imported_checkpoint.checkpoint_id = self._next_available_checkpoint_id()
+            imported_checkpoint.label = self._renamed_import_label(
+                imported_checkpoint.label,
+                imported_checkpoint.checkpoint_id,
+            )
+
+        self._checkpoints.append(imported_checkpoint)
+        if imported_checkpoint.run_id is not None and imported_checkpoint.task_snapshot is not None:
+            self._run_task_snapshots.setdefault(
+                imported_checkpoint.run_id,
+                deepcopy(imported_checkpoint.task_snapshot),
+            )
+        self._checkpoint_counter = self._next_checkpoint_counter_floor()
+        self.history_changed.emit()
+        return deepcopy(imported_checkpoint)
+
+    def delete_checkpoint_tree(self, checkpoint_ids: list[str] | tuple[str, ...] | set[str]) -> list[str]:
+        if self._has_live_runs():
+            msg = "Cannot delete checkpoints while training is active."
+            raise RuntimeError(msg)
+
+        root_ids = {str(checkpoint_id) for checkpoint_id in checkpoint_ids if str(checkpoint_id)}
+        known_ids = {checkpoint.checkpoint_id for checkpoint in self._checkpoints}
+        root_ids &= known_ids
+        if not root_ids:
+            return []
+
+        deleted_ids = self._descendant_checkpoint_ids(root_ids)
+        deleted_checkpoints = [
+            checkpoint
+            for checkpoint in self._checkpoints
+            if checkpoint.checkpoint_id in deleted_ids
+        ]
+        self._checkpoints = [
+            checkpoint
+            for checkpoint in self._checkpoints
+            if checkpoint.checkpoint_id not in deleted_ids
+        ]
+
+        removed_run_ids = self._orphaned_run_ids_after_checkpoint_delete(
+            deleted_checkpoints=deleted_checkpoints,
+            deleted_checkpoint_ids=deleted_ids,
+        )
+        self._purge_run_records(removed_run_ids)
+
+        self._checkpoint_counter = self._next_checkpoint_counter_floor()
+        self.history_changed.emit()
+        return sorted(deleted_ids)
+
+    def _descendant_checkpoint_ids(self, root_ids: set[str]) -> set[str]:
+        deleted_ids = set(root_ids)
+        changed = True
+        while changed:
+            changed = False
+            for checkpoint in self._checkpoints:
+                if checkpoint.checkpoint_id in deleted_ids:
+                    continue
+                if checkpoint.parent_checkpoint_id in deleted_ids:
+                    deleted_ids.add(checkpoint.checkpoint_id)
+                    changed = True
+        return deleted_ids
+
+    def _orphaned_run_ids_after_checkpoint_delete(
+        self,
+        *,
+        deleted_checkpoints: list[Checkpoint],
+        deleted_checkpoint_ids: set[str],
+    ) -> set[str]:
+        surviving_run_ids = {
+            checkpoint.run_id
+            for checkpoint in self._checkpoints
+            if checkpoint.run_id is not None
+        }
+        candidate_run_ids = {
+            checkpoint.run_id
+            for checkpoint in deleted_checkpoints
+            if checkpoint.run_id is not None
+        }
+        candidate_run_ids.update(
+            run.run_id
+            for run in self._runs
+            if run.parent_checkpoint_id in deleted_checkpoint_ids
+        )
+        for checkpoint in deleted_checkpoints:
+            evaluation = checkpoint.metadata.get("evaluation")
+            if isinstance(evaluation, dict):
+                run_id = evaluation.get("run_id")
+                if isinstance(run_id, str) and run_id:
+                    candidate_run_ids.add(run_id)
+        return candidate_run_ids - surviving_run_ids
+
+    def _purge_run_records(self, run_ids: set[str]) -> None:
+        if not run_ids:
+            return
+
+        for run_id in run_ids:
+            context = self._run_contexts.pop(run_id, None)
+            if context is not None:
+                try:
+                    context.runner.stop()
+                except Exception:
+                    pass
+            self._runs_by_id.pop(run_id, None)
+            self._episodes_by_run.pop(run_id, None)
+            self._pending_episodes_by_run.pop(run_id, None)
+            self._run_task_snapshots.pop(run_id, None)
+
+        self._runs = [run for run in self._runs if run.run_id not in run_ids]
+        self._current_session_run_ids = [
+            run_id for run_id in self._current_session_run_ids if run_id not in run_ids
+        ]
+        if self._primary_live_run_id in run_ids:
+            self._primary_live_run_id = None
+        if self._primary_live_run_id is None:
+            self._runner = None
+
+    def evaluate_checkpoint(self, checkpoint_id: str, evaluation_policy: dict[str, Any]) -> Checkpoint:
+        if self._has_live_runs():
+            msg = "Cannot evaluate a checkpoint while training is active."
+            raise RuntimeError(msg)
+
+        checkpoint_index = self._checkpoint_index(checkpoint_id)
+        if checkpoint_index is None:
+            msg = f"Unknown checkpoint: {checkpoint_id}"
+            raise RuntimeError(msg)
+
+        checkpoint = deepcopy(self._checkpoints[checkpoint_index])
+        metadata = dict(checkpoint.metadata)
+        learner_state = metadata.get("learner_state")
+        if not isinstance(learner_state, dict):
+            msg = f"Checkpoint {checkpoint_id} does not contain a learner state."
+            raise RuntimeError(msg)
+
+        config = self._config_for_checkpoint(checkpoint)
+        config.evaluation_policy = deepcopy(evaluation_policy)
+        evaluation_result, evaluation_error = self._run_checkpoint_evaluation(
+            checkpoint_id=checkpoint.checkpoint_id,
+            config=config,
+            learner_state=deepcopy(learner_state),
+            policy=config.evaluation_policy,
+        )
+
+        evaluation_run_id = f"eval_{checkpoint.checkpoint_id}"
+        metadata.pop("evaluation", None)
+        metadata.pop("evaluation_metrics", None)
+        metadata.pop("evaluation_error", None)
+        if evaluation_result is not None:
+            metadata["evaluation_metrics"] = self._metrics_payload(evaluation_result.metrics)
+            metadata["evaluation"] = self._evaluation_metadata_payload(
+                evaluation_result,
+                config=config,
+            )
+        elif evaluation_error is not None:
+            self._episodes_by_run.pop(evaluation_run_id, None)
+            self._pending_episodes_by_run.pop(evaluation_run_id, None)
+            self._run_task_snapshots.pop(evaluation_run_id, None)
+            metadata["evaluation_error"] = evaluation_error
+
+        checkpoint.metadata = metadata
+        self._checkpoints[checkpoint_index] = checkpoint
+        self.history_changed.emit()
+        if evaluation_error is not None:
+            msg = f"Evaluation failed for {checkpoint_id}: {evaluation_error}"
+            raise RuntimeError(msg)
+        return deepcopy(checkpoint)
+
+    def evaluate_checkpoint_multiple(
+        self,
+        checkpoint_id: str,
+        evaluation_policies: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if self._has_live_runs():
+            msg = "Cannot evaluate a checkpoint while training is active."
+            raise RuntimeError(msg)
+
+        checkpoint_index = self._checkpoint_index(checkpoint_id)
+        if checkpoint_index is None:
+            msg = f"Unknown checkpoint: {checkpoint_id}"
+            raise RuntimeError(msg)
+
+        checkpoint = deepcopy(self._checkpoints[checkpoint_index])
+        learner_state = checkpoint.metadata.get("learner_state")
+        if not isinstance(learner_state, dict):
+            msg = f"Checkpoint {checkpoint_id} does not contain a learner state."
+            raise RuntimeError(msg)
+
+        base_config = self._config_for_checkpoint(checkpoint)
+        rows: list[dict[str, Any]] = []
+        for index, policy in enumerate(evaluation_policies, start=1):
+            config = RunConfig.from_dict(base_config.to_dict())
+            config.evaluation_policy = deepcopy(policy)
+            row = self._evaluation_result_base_row(
+                checkpoint_id=checkpoint.checkpoint_id,
+                policy=policy,
+            )
+            result, error = self._run_checkpoint_evaluation(
+                checkpoint_id=checkpoint.checkpoint_id,
+                config=config,
+                learner_state=deepcopy(learner_state),
+                policy=config.evaluation_policy,
+                evaluation_run_id=f"eval_{checkpoint.checkpoint_id}_{index}",
+                store_result=False,
+            )
+            if result is not None:
+                row.update(
+                    {
+                        "task_name": result.task.name,
+                        "task_id": result.task.task_id,
+                        "environment_id": result.task.environment_id,
+                        **self._metrics_payload(result.metrics),
+                        "error": "",
+                    }
+                )
+            else:
+                row["error"] = error or "Evaluation did not run."
+            rows.append(row)
+        return rows
 
     def start(
         self,
@@ -483,6 +711,17 @@ class TrainingService(QObject):
         if run is None:
             return False
 
+        run_checkpoints = [
+            checkpoint for checkpoint in self._checkpoints if checkpoint.run_id == run_id
+        ]
+        if reason in {"run_finished", "run_stopped"} and run_checkpoints:
+            latest_checkpoint = run_checkpoints[-1]
+            if (
+                latest_checkpoint.step == context.latest_metrics.step
+                and latest_checkpoint.episode == context.latest_metrics.episode
+            ):
+                return False
+
         self._checkpoint_counter += 1
         checkpoint_id = f"checkpoint_{self._checkpoint_counter:03d}"
         created_at = self._timestamp_now()
@@ -500,6 +739,27 @@ class TrainingService(QObject):
 
         task_snapshot = self._run_task_snapshots.get(run_id) or context.task_snapshot
         learner_state = context.runner.export_learner_state()
+        evaluation_result, evaluation_error = self._evaluate_checkpoint_policy(
+            checkpoint_id=checkpoint_id,
+            context=context,
+            learner_state=learner_state,
+        )
+
+        metadata: dict[str, Any] = {
+            "algorithm": context.config.algorithm,
+            "seed": context.config.seed,
+            "run_config_id": context.config.run_config_id,
+            "training_metrics": self._metrics_payload(context.latest_metrics),
+            "learner_state": learner_state,
+        }
+        if evaluation_result is not None:
+            metadata["evaluation_metrics"] = self._metrics_payload(evaluation_result.metrics)
+            metadata["evaluation"] = self._evaluation_metadata_payload(
+                evaluation_result,
+                config=context.config,
+            )
+        elif evaluation_error is not None:
+            metadata["evaluation_error"] = evaluation_error
 
         checkpoint = Checkpoint(
             checkpoint_id=checkpoint_id,
@@ -513,18 +773,167 @@ class TrainingService(QObject):
             step=context.latest_metrics.step,
             episode=context.latest_metrics.episode,
             task_snapshot=deepcopy(task_snapshot),
-            metadata={
-                "algorithm": context.config.algorithm,
-                "seed": context.config.seed,
-                "run_config_id": context.config.run_config_id,
-                "training_metrics": self._metrics_payload(context.latest_metrics),
-                "learner_state": learner_state,
-            },
+            metadata=metadata,
         )
 
         self._checkpoints.append(checkpoint)
         self.history_changed.emit()
         return True
+
+    def _evaluate_checkpoint_policy(
+        self,
+        *,
+        checkpoint_id: str,
+        context: _RunContext,
+        learner_state: dict[str, Any],
+    ) -> tuple[EvaluationResult | None, str | None]:
+        policy = context.config.evaluation_policy
+        return self._run_checkpoint_evaluation(
+            checkpoint_id=checkpoint_id,
+            config=context.config,
+            learner_state=learner_state,
+            policy=policy,
+        )
+
+    def _evaluation_result_base_row(
+        self,
+        *,
+        checkpoint_id: str,
+        policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        task_payload = policy.get("task") if isinstance(policy, dict) else None
+        if isinstance(task_payload, dict):
+            task_name = str(
+                task_payload.get("name", task_payload.get("task_name", "Evaluation Task"))
+            )
+            task_id = task_payload.get("task_id")
+            environment_id = str(task_payload.get("environment_id", ""))
+        else:
+            task_name = "Evaluation Task"
+            task_id = None
+            environment_id = ""
+        return {
+            "checkpoint_id": checkpoint_id,
+            "task_name": task_name,
+            "task_id": task_id,
+            "environment_id": environment_id,
+            "episode_count": policy.get("episode_count") if isinstance(policy, dict) else None,
+            "max_steps_per_episode": (
+                policy.get("max_steps_per_episode") if isinstance(policy, dict) else None
+            ),
+            "seed": policy.get("seed") if isinstance(policy, dict) else None,
+        }
+
+    def _run_checkpoint_evaluation(
+        self,
+        *,
+        checkpoint_id: str,
+        config: RunConfig,
+        learner_state: dict[str, Any],
+        policy: dict[str, Any],
+        evaluation_run_id: str | None = None,
+        store_result: bool = True,
+    ) -> tuple[EvaluationResult | None, str | None]:
+        if not isinstance(policy, dict) or not policy:
+            return None, None
+
+        task_payload = policy.get("task")
+        if not isinstance(task_payload, dict):
+            return None, "Evaluation policy does not contain a task snapshot."
+
+        try:
+            episode_count = int(policy.get("episode_count", 0))
+        except (TypeError, ValueError):
+            return None, "Evaluation episode count is invalid."
+        if episode_count <= 0:
+            return None, None
+
+        try:
+            evaluation_seed = self._evaluation_seed(config)
+        except ValueError as exc:
+            return None, str(exc)
+
+        max_steps_per_episode = self._evaluation_max_steps_per_episode(config)
+        evaluation_task = self._task_from_policy_payload(task_payload)
+        evaluation_run_id = evaluation_run_id or f"eval_{checkpoint_id}"
+
+        try:
+            result = evaluate_policy(
+                task=evaluation_task,
+                config=config,
+                learner_state=learner_state,
+                env_factory=self._resolve_env_factory(evaluation_task),
+                run_id=evaluation_run_id,
+                episode_count=episode_count,
+                max_steps_per_episode=max_steps_per_episode,
+                seed=evaluation_seed,
+            )
+        except Exception as exc:
+            return None, str(exc)
+
+        if store_result:
+            self._episodes_by_run[evaluation_run_id] = deepcopy(result.episodes)
+            self._pending_episodes_by_run[evaluation_run_id] = []
+            self._run_task_snapshots[evaluation_run_id] = deepcopy(result.task_snapshot)
+        return result, None
+
+    def _evaluation_metadata_payload(
+        self,
+        result: EvaluationResult,
+        *,
+        config: RunConfig,
+    ) -> dict[str, Any]:
+        return {
+            "run_id": result.run_id,
+            "task_id": result.task.task_id,
+            "task_name": result.task.name,
+            "environment_id": result.task.environment_id,
+            "episode_count": result.metrics.episode,
+            "max_steps_per_episode": self._evaluation_max_steps_per_episode(config),
+            "seed": self._evaluation_seed(config),
+            "trace_sample_rate": 1.0,
+        }
+
+    def _evaluation_max_steps_per_episode(self, config: RunConfig) -> int | None:
+        policy = config.evaluation_policy
+        if not isinstance(policy, dict):
+            return None
+        raw_value = policy.get("max_steps_per_episode")
+        if raw_value is None:
+            return None
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    def _evaluation_seed(self, config: RunConfig) -> int | None:
+        policy = config.evaluation_policy
+        if not isinstance(policy, dict):
+            return config.seed
+        raw_value = policy.get("seed")
+        if raw_value is None or raw_value == "":
+            return config.seed
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError) as exc:
+            msg = "Evaluation seed is invalid."
+            raise ValueError(msg) from exc
+
+    def _task_from_policy_payload(self, payload: dict[str, Any]) -> TaskDefinition:
+        derived_keys = {
+            "derived_task_id",
+            "parent_task_id",
+            "derivation_reason",
+            "source_episode_id",
+            "source_moment_index",
+            "source_run_id",
+            "start_state",
+            "goal_state",
+        }
+        if any(key in payload for key in derived_keys):
+            return DerivedTaskDefinition.from_dict(payload)
+        return TaskDefinition.from_dict(payload)
 
     def _flush_pending_episodes(
         self,
@@ -586,6 +995,7 @@ class TrainingService(QObject):
             step=sum(context.latest_metrics.step for context in contexts),
             episode=sum(context.latest_metrics.episode for context in contexts),
             reward_step=0.0 if reward_step_mean is None else reward_step_mean,
+            cumulative_reward=sum(context.latest_metrics.cumulative_reward for context in contexts),
             mean_reward=0.0 if episode_reward_mean is None else episode_reward_mean,
             episode_reward_mean=0.0 if episode_reward_mean is None else episode_reward_mean,
             success_rate=0.0 if success_rate is None else success_rate,
@@ -643,6 +1053,7 @@ class TrainingService(QObject):
             "step": metrics.step,
             "episode": metrics.episode,
             "reward_step": metrics.reward_step,
+            "cumulative_reward": metrics.cumulative_reward,
             "mean_reward": metrics.mean_reward,
             "episode_reward_mean": metrics.episode_reward_mean,
             "success_rate": metrics.success_rate,
@@ -684,6 +1095,46 @@ class TrainingService(QObject):
         if task_snapshot is None or task_snapshot.environment_id != task.environment_id:
             return False
         return checkpoint.metadata.get("algorithm") == config.algorithm
+
+    def _checkpoint_index(self, checkpoint_id: str) -> int | None:
+        for index, checkpoint in enumerate(self._checkpoints):
+            if checkpoint.checkpoint_id == checkpoint_id:
+                return index
+        return None
+
+    def _config_for_checkpoint(self, checkpoint: Checkpoint) -> RunConfig:
+        metadata = checkpoint.metadata if isinstance(checkpoint.metadata, dict) else {}
+        run_config_payload = metadata.get("run_config")
+        if isinstance(run_config_payload, dict):
+            return RunConfig.from_dict(run_config_payload)
+
+        raw_seed = metadata.get("seed")
+        try:
+            seed = int(raw_seed) if raw_seed is not None else None
+        except (TypeError, ValueError):
+            seed = None
+        return RunConfig(
+            algorithm=str(metadata.get("algorithm", "q_learning")),
+            seed=seed,
+        )
+
+    def _checkpoint_id_exists(self, checkpoint_id: str) -> bool:
+        return any(checkpoint.checkpoint_id == checkpoint_id for checkpoint in self._checkpoints)
+
+    def _next_available_checkpoint_id(self) -> str:
+        counter = self._next_checkpoint_counter_floor() + 1
+        while True:
+            checkpoint_id = f"checkpoint_{counter:03d}"
+            if not self._checkpoint_id_exists(checkpoint_id):
+                return checkpoint_id
+            counter += 1
+
+    def _renamed_import_label(self, label: str, checkpoint_id: str) -> str:
+        base_label = label.strip() if label else "Imported Checkpoint"
+        suffix = f"imported as {checkpoint_id}"
+        if suffix in base_label:
+            return base_label
+        return f"{base_label} | {suffix}"
 
     def _next_checkpoint_counter_floor(self) -> int:
         pattern = re.compile(r"^checkpoint_(\d+)$")

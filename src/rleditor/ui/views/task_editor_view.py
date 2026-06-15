@@ -14,6 +14,7 @@ class TaskEditorView(QWidget):
         super().__init__()
         self._active_editor: QWidget | None = None
         self._task: TaskDefinition | None = None
+        self._loading_task = False
 
         self.root_layout = QVBoxLayout(self)
         self.title = QLabel("Task Editor")
@@ -48,12 +49,23 @@ class TaskEditorView(QWidget):
             self.root_layout.addWidget(placeholder)
             return
 
-        self._active_editor = plugin.gui_extension.create_task_editor_widget(
-            task=task,
-            on_task_changed=self._on_task_changed,
-        )
+        self._loading_task = True
+        try:
+            self._active_editor = plugin.gui_extension.create_task_editor_widget(
+                task=task,
+                on_task_changed=self._on_task_changed,
+            )
+        finally:
+            self._loading_task = False
         self.root_layout.addWidget(self._active_editor)
         self.root_layout.addStretch(1)
+
+    def clear_task(self) -> None:
+        self._task = None
+        self.name_input.blockSignals(True)
+        self.name_input.clear()
+        self.name_input.blockSignals(False)
+        self._clear_editor()
 
     def _clear_editor(self) -> None:
         while self.root_layout.count() > 3:
@@ -83,4 +95,6 @@ class TaskEditorView(QWidget):
 
     def _on_task_changed(self, task: TaskDefinition) -> None:
         self._task = task
+        if self._loading_task:
+            return
         self.task_changed.emit(task)

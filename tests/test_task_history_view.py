@@ -17,7 +17,7 @@ def _app() -> QApplication:
     return app
 
 
-def test_task_history_view_builds_lineage_and_defaults_to_first_task() -> None:
+def test_task_history_view_builds_tree_and_defaults_to_first_task() -> None:
     _app()
     base_task = TaskDefinition(
         environment_id="dummy_env",
@@ -37,7 +37,10 @@ def test_task_history_view_builds_lineage_and_defaults_to_first_task() -> None:
 
     assert view.selected_task() is base_task
     assert view.selected_tasks() == [base_task]
-    assert len(view.graph_widget._edges) == 1
+    root_item = view.tree_widget.topLevelItem(0)
+    assert root_item.text(0) == "Main Task"
+    assert root_item.childCount() == 1
+    assert root_item.child(0).text(0) == "Derived Task"
 
 
 def test_task_history_view_supports_multi_selection_with_primary_task() -> None:
@@ -60,3 +63,72 @@ def test_task_history_view_supports_multi_selection_with_primary_task() -> None:
     assert view.selected_task() is second_task
     assert view.selected_tasks() == [base_task, second_task]
     assert view.primary_workspace_index() == 1
+
+
+def test_task_history_view_emits_edit_copy_and_delete_requests() -> None:
+    _app()
+    base_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Main Task",
+        task_id="task_main",
+    )
+    derived_task = DerivedTaskDefinition(
+        environment_id="dummy_env",
+        name="Derived Task",
+        task_id="task_derived",
+        parent_task_id="task_main",
+    )
+
+    view = TaskHistoryView()
+    view.set_tasks([base_task, derived_task])
+    view.set_primary_workspace_index(1, preserve_multi_selection=False, emit_signal=False)
+
+    edited: list[int] = []
+    copied: list[int] = []
+    deleted: list[list[int]] = []
+    view.edit_task_requested.connect(edited.append)
+    view.copy_task_requested.connect(copied.append)
+    view.delete_tasks_requested.connect(deleted.append)
+
+    view.edit_task_button.click()
+    view.copy_task_button.click()
+    view.delete_task_button.click()
+
+    assert edited == [1]
+    assert copied == [1]
+    assert deleted == [[1]]
+
+
+def test_task_history_view_delete_request_includes_multiple_selected_tasks() -> None:
+    _app()
+    base_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Main Task",
+        task_id="task_main",
+    )
+    second_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Second Task",
+        task_id="task_second",
+    )
+
+    view = TaskHistoryView()
+    view.set_tasks([base_task, second_task])
+    view.toggle_workspace_index_selection(1, emit_signal=False)
+    deleted: list[list[int]] = []
+    view.delete_tasks_requested.connect(deleted.append)
+
+    view.delete_task_button.click()
+
+    assert deleted == [[0, 1]]
+
+
+def test_task_history_view_emits_import_request() -> None:
+    _app()
+    view = TaskHistoryView()
+    emitted: list[bool] = []
+    view.import_task_requested.connect(lambda: emitted.append(True))
+
+    view.import_task_button.click()
+
+    assert emitted == [True]

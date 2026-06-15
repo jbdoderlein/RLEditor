@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 from rleditor.application.persistence import ProjectStore
 from rleditor.application.services import TaskService, TrainingService
 from rleditor.plugins.registry import PluginRegistry, register_builtin_plugins
+from rleditor.ui.interaction_logging import InteractionLogger
 from rleditor.ui.shell.main_window import MainWindow
 from rleditor.ui.styles.theme import apply_theme
 
@@ -31,6 +32,11 @@ def _build_parser(plugin_ids: list[str]) -> argparse.ArgumentParser:
         "--project",
         type=Path,
         help="Project JSON path. Defaults to an environment-specific file under the user data directory.",
+    )
+    parser.add_argument(
+        "--interaction-log",
+        type=Path,
+        help="Write UI interaction events to this JSON Lines log file.",
     )
     return parser
 
@@ -85,6 +91,14 @@ def run(argv: Sequence[str] | None = None) -> int:
     app = QApplication([sys.argv[0]])
     app.setApplicationName("RL Debug Studio")
     apply_theme(app)
+    try:
+        interaction_logger = (
+            InteractionLogger(args.interaction_log)
+            if args.interaction_log is not None
+            else None
+        )
+    except OSError as exc:
+        parser.error(f"Could not open interaction log: {exc}")
 
     task_service = TaskService(registry)
     training_service = TrainingService(registry)
@@ -98,8 +112,20 @@ def run(argv: Sequence[str] | None = None) -> int:
         initial_plugin_id=initial_plugin_id,
         initial_tasks=None if project_state is None else project_state.task_workspace,
         project_store=project_store,
+        interaction_logger=interaction_logger,
     )
+    if interaction_logger is not None:
+        interaction_logger.attach(app, root_widget=window, training_service=training_service)
+        interaction_logger.log(
+            "application_started",
+            environment_id=initial_plugin_id,
+            project_path=str(project_store.project_path),
+        )
     window.resize(1280, 820)
     window.show()
 
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        if interaction_logger is not None:
+            interaction_logger.close()

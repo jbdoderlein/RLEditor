@@ -97,6 +97,13 @@ def test_run_config_roundtrip_preserves_breakpoint_actions() -> None:
     assert restored.breakpoints[1].actions == ["stop"]
 
 
+def test_run_config_defaults_q_learning_to_full_exploration() -> None:
+    config = RunConfig()
+
+    assert config.epsilon == 1.0
+    assert config.hyperparameters["epsilon"] == 1.0
+
+
 def test_run_config_supports_unlimited_max_steps() -> None:
     config = RunConfig(max_steps=-1)
 
@@ -106,6 +113,28 @@ def test_run_config_supports_unlimited_max_steps() -> None:
     assert config.max_steps is None
     assert payload["max_steps"] is None
     assert restored.max_steps is None
+
+
+def test_run_config_roundtrip_preserves_evaluation_policy() -> None:
+    config = RunConfig(
+        max_steps=100,
+        evaluation_policy={
+            "task": {
+                "environment_id": "frozen_lake",
+                "name": "Evaluation Task",
+                "task_id": "task_eval",
+            },
+            "episode_count": 20,
+            "max_steps_per_episode": 500,
+            "trace_sample_rate": 1.0,
+        },
+    )
+
+    restored = RunConfig.from_dict(config.to_dict())
+
+    assert restored.evaluation_policy["task"]["task_id"] == "task_eval"
+    assert restored.evaluation_policy["episode_count"] == 20
+    assert restored.evaluation_policy["max_steps_per_episode"] == 500
 
 
 def test_episode_trace_roundtrip_preserves_task_snapshot_and_initial_observation() -> None:
@@ -228,6 +257,39 @@ def test_episode_moment_roundtrip_preserves_restorable_state() -> None:
     assert restored.episode_id == 4
     assert restored.moment_index == 9
     assert restored.restorable_env_state == {"opaque": "blob"}
+
+
+def test_episode_trace_roundtrip_preserves_vector_actions() -> None:
+    trace = EpisodeTrace(
+        episode_id=7,
+        total_reward=-1.0,
+        success=False,
+        steps=[
+            EpisodeStep(
+                t=0,
+                observation=[0.1, 0.2],
+                action=[-0.5, 0.25],
+                reward=-1.0,
+                next_observation=[0.0, 0.3],
+                terminated=False,
+                truncated=True,
+            )
+        ],
+        moments=[
+            EpisodeMoment(
+                episode_id=7,
+                moment_index=1,
+                observation=[0.0, 0.3],
+                action_taken=[-0.5, 0.25],
+                reward=-1.0,
+            )
+        ],
+    )
+
+    restored = EpisodeTrace.from_dict(trace.to_dict())
+
+    assert restored.steps[0].action == [-0.5, 0.25]
+    assert restored.moments[0].action_taken == [-0.5, 0.25]
 
 
 def test_checkpoint_roundtrip_preserves_parent_lineage() -> None:
