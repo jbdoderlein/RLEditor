@@ -38,7 +38,7 @@ DEFAULT_REWARD_CONFIG: dict[str, float] = {
 
 RQ1_HOLE_DENSITIES: list[float] = [0.10, 0.20, 0.30, 0.40]
 
-RQ1_BASE_SEED: int = 57
+RQ1_BASE_SEED: int = 121
 
 _OUTPUT_DIR: Path = Path(__file__).parent / "curricula" / f"rq1_seed{RQ1_BASE_SEED}"
 

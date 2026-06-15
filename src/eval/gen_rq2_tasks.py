@@ -41,7 +41,7 @@ RQ1_BASE_SEED: int = 121
 
 RQ2_DISSIMILARITIES: list[float] = [0.2, 0.4, 0.6, 0.8]
 
-_OUTPUT_DIR: Path = Path(__file__).parent / "curricula" / "rq2"
+_OUTPUT_DIR: Path = Path(__file__).parent / "curricula" / f"rq2_seed{RQ1_BASE_SEED}"
 
 
 # ---------------------------------------------------------------------------

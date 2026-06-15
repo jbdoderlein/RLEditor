@@ -1,0 +1,45 @@
+{
+  "curriculum": {
+    "steps": [
+      {
+        "env_id": "0",
+        "algorithm": "q_learning"
+      }
+    ]
+  },
+  "environments": [
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 0,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 003 - Mutated 002",
+      "metadata": {},
+      "task_config": {
+        "hole_probability": 0.298611,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFHFFFFFFHF",
+          "FFHHFFFFHFFH",
+          "HFFFFFFFHHFF",
+          "FFHFFFFFFHHF",
+          "FFFFHHFHHFHF",
+          "FFHHFFFFFFFF",
+          "HFFFFFHFFFFH",
+          "HFFFFFFFFHFF",
+          "FHFFFFFFHFFH",
+          "HHFFHHHHHHFF",
+          "FHFHFHFHFFFF",
+          "HHHFFFFHFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    }
+  ]
+}
