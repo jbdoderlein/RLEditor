@@ -27,11 +27,11 @@ from eval.frozen_lake import FrozenLakeEnv, generate_random_map
 # Global defaults
 # ---------------------------------------------------------------------------
 
-SIZE        = 16                  # grid side length
+SIZE        = 12                  # grid side length
 MAX_DENSITY = 0.3  # 0.2986 — largest discrete density < 30%
 RQ1_N       = 30                  # number of target tasks for RQ1
-RQ1_CURRICULUM_STEPS = 4          # maps per RQ1 curriculum, including empty + target
-RQ1_EPISODES_PER_STEP = 1000      # training episodes for each RQ1 curriculum step
+RQ1_CURRICULUM_STEPS = 5          # maps per RQ1 curriculum, including empty + target
+RQ1_EPISODES_PER_STEP = 500      # training episodes for each RQ1 curriculum step
 RQ1_MAX_STEPS_PER_EPISODE = 100   # max steps for each training episode
 RQ1_EVAL_EPISODES = 100            # checkpoint evaluation episodes for each RQ1 curriculum
 RQ1_EVAL_MAX_STEPS_PER_EPISODE = 100

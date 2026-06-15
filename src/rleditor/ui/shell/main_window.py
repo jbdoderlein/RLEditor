@@ -161,6 +161,7 @@ class MainWindow(QMainWindow):
         self.episode_view.create_task_from_moment_requested.connect(self._on_derive_task_from_episode_moment)
         self.history_view.inspect_episode_requested.connect(self._inspect_episode_from_history)
         self.history_view.checkpoint_import_requested.connect(self._on_checkpoint_import_requested)
+        self.history_view.checkpoint_delete_requested.connect(self._on_checkpoint_delete_requested)
         self.history_view.checkpoint_evaluation_requested.connect(self._on_checkpoint_evaluation_requested)
         self.history_view.curriculum_import_requested.connect(self._on_curriculum_import_requested)
         self.history_view.training_run_config_selected.connect(self._on_training_run_config_selected)
@@ -679,6 +680,28 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(str(exc))
             return
         self.statusBar().showMessage(f"Imported checkpoint: {imported_checkpoint.checkpoint_id}")
+
+    def _on_checkpoint_delete_requested(self, checkpoint_ids: object) -> None:
+        if not isinstance(checkpoint_ids, list | tuple | set):
+            return
+        try:
+            deleted_checkpoint_ids = self._training_service.delete_checkpoint_tree(
+                [str(checkpoint_id) for checkpoint_id in checkpoint_ids]
+            )
+        except RuntimeError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+
+        deleted_count = len(deleted_checkpoint_ids)
+        if deleted_count == 0:
+            self.statusBar().showMessage("No checkpoint deleted")
+            return
+        self.statusBar().showMessage(f"Deleted {deleted_count} checkpoint(s)")
+        self._log_interaction(
+            "checkpoint_deleted",
+            deleted_count=deleted_count,
+            checkpoint_ids=deleted_checkpoint_ids,
+        )
 
     def _on_checkpoint_evaluation_requested(self, checkpoint: Checkpoint) -> None:
         policy = self.evaluation_view.build_evaluation_policy()

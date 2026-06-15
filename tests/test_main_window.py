@@ -16,6 +16,7 @@ from rleditor.core.models import (
     Breakpoint,
     Checkpoint,
     DerivedTaskDefinition,
+    EpisodeTrace,
     RunConfig,
     TaskDefinition,
     TaskSnapshot,
@@ -1482,6 +1483,91 @@ def test_multiple_evaluation_button_runs_selected_checkpoint_on_checked_tasks(mo
         if event == "checkpoint_multiple_evaluated"
     ]
     assert logged[-1]["evaluation_count"] == 1
+
+
+def test_checkpoint_history_delete_removes_selected_checkpoint_subtree() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    interaction_logger = _FakeInteractionLogger()
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+        interaction_logger=interaction_logger,  # type: ignore[arg-type]
+    )
+    task_snapshot = TaskSnapshot(environment_id="dummy_env", task_name="Dummy Task", task_id="task_main")
+    training_service.load_history(
+        TrainingHistorySnapshot(
+            runs=[
+                TrainingRun(run_id="run_001", task_id="task_main", status=TrainingStatus.FINISHED),
+                TrainingRun(
+                    run_id="run_002",
+                    task_id="task_main",
+                    status=TrainingStatus.FINISHED,
+                    parent_checkpoint_id="checkpoint_001",
+                ),
+            ],
+            checkpoints=[
+                Checkpoint(
+                    checkpoint_id="checkpoint_001",
+                    label="Checkpoint 001",
+                    created_at="2026-06-11 10:00:00",
+                    reason="run_finished",
+                    run_id="run_001",
+                    task_snapshot=task_snapshot,
+                    metadata={"learner_state": {"q_values": []}},
+                ),
+                Checkpoint(
+                    checkpoint_id="checkpoint_002",
+                    label="Checkpoint 002",
+                    created_at="2026-06-11 10:01:00",
+                    reason="run_finished",
+                    parent_checkpoint_id="checkpoint_001",
+                    run_id="run_002",
+                    task_snapshot=task_snapshot,
+                    metadata={"learner_state": {"q_values": []}},
+                ),
+            ],
+            episodes_by_run={
+                "run_001": [EpisodeTrace(episode_id=1, run_id="run_001", total_reward=1.0, success=True)],
+                "run_002": [EpisodeTrace(episode_id=1, run_id="run_002", total_reward=2.0, success=True)],
+            },
+            run_task_snapshots={
+                "run_001": task_snapshot,
+                "run_002": task_snapshot,
+            },
+        )
+    )
+    window.history_view.graph_widget.select_node("checkpoint_001")
+    node = window.history_view.graph_widget.node_for_id("checkpoint_001")
+    assert node is not None
+    window.history_view._show_node_details(node)
+
+    window.history_view.delete_checkpoint_button.click()
+    snapshot = training_service.history_snapshot()
+
+    assert snapshot.checkpoints == []
+    assert snapshot.runs == []
+    assert snapshot.episodes_by_run == {}
+    assert window.history_view.graph_widget.node_for_id("checkpoint_001") is None
+    assert "Deleted 2 checkpoint(s)" in window.statusBar().currentMessage()
+    logged = [
+        payload
+        for event, payload in interaction_logger.records
+        if event == "checkpoint_deleted"
+    ]
+    assert logged[-1]["deleted_count"] == 2
 
 
 def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() -> None:

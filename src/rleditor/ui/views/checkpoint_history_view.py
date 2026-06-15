@@ -1028,6 +1028,7 @@ class CheckpointGraphWidget(QWidget):
 class CheckpointHistoryView(QWidget):
     inspect_episode_requested = Signal(object)
     checkpoint_import_requested = Signal(object)
+    checkpoint_delete_requested = Signal(object)
     checkpoint_evaluation_requested = Signal(object)
     curriculum_import_requested = Signal(object)
     training_run_config_selected = Signal(object)
@@ -1088,6 +1089,11 @@ class CheckpointHistoryView(QWidget):
             "Export only the selected checkpoint JSON."
         )
         self.export_checkpoint_button.setEnabled(False)
+        self.delete_checkpoint_button = QPushButton("Delete Checkpoint", right_panel)
+        self.delete_checkpoint_button.setToolTip(
+            "Delete the selected checkpoint(s) and all descendant checkpoints."
+        )
+        self.delete_checkpoint_button.setEnabled(False)
         self.evaluate_checkpoint_button = QPushButton("Run Evaluation", right_panel)
         self.evaluate_checkpoint_button.setToolTip(
             "Evaluate the selected checkpoint using the Evaluation tab settings."
@@ -1145,6 +1151,7 @@ class CheckpointHistoryView(QWidget):
 
         checkpoint_buttons_layout = QHBoxLayout()
         checkpoint_buttons_layout.addWidget(self.export_checkpoint_button)
+        checkpoint_buttons_layout.addWidget(self.delete_checkpoint_button)
         checkpoint_buttons_layout.addWidget(self.import_checkpoint_button)
         checkpoint_buttons_layout.addStretch(1)
 
@@ -1183,6 +1190,7 @@ class CheckpointHistoryView(QWidget):
         self.export_curriculum_plan_button.clicked.connect(self._export_selected_curriculum_plan)
         self.show_training_report_button.clicked.connect(self._show_training_report_for_selected_checkpoint)
         self.export_checkpoint_button.clicked.connect(self._export_selected_checkpoint)
+        self.delete_checkpoint_button.clicked.connect(self._emit_delete_selected_checkpoints)
         self.evaluate_checkpoint_button.clicked.connect(self._emit_evaluate_selected_checkpoint)
         self.live_edit_button.clicked.connect(self._request_live_edit_for_selected_edge)
         self.show_q_table_button.clicked.connect(self._show_selected_q_table)
@@ -1493,6 +1501,7 @@ class CheckpointHistoryView(QWidget):
         self.export_curriculum_plan_button.setEnabled(enabled)
         self.show_training_report_button.setEnabled(enabled)
         self.export_checkpoint_button.setEnabled(enabled)
+        self.delete_checkpoint_button.setEnabled(enabled)
         self.evaluate_checkpoint_button.setEnabled(enabled)
 
     def _set_live_edit_button_enabled(self, enabled: bool) -> None:
@@ -1664,6 +1673,17 @@ class CheckpointHistoryView(QWidget):
             f"Checkpoint exported to:\n{path}",
         )
 
+    def _emit_delete_selected_checkpoints(self) -> None:
+        checkpoint_ids = self._selected_delete_checkpoint_ids()
+        if not checkpoint_ids:
+            QMessageBox.warning(
+                self,
+                "Delete Checkpoint",
+                "Select one or more checkpoints before deleting.",
+            )
+            return
+        self.checkpoint_delete_requested.emit(checkpoint_ids)
+
     def _import_checkpoint_from_file(self) -> None:
         selected_path, _selected_filter = QFileDialog.getOpenFileName(
             self,
@@ -1748,6 +1768,24 @@ class CheckpointHistoryView(QWidget):
 
         checkpoint = self.selected_checkpoint()
         return [] if checkpoint is None else [checkpoint]
+
+    def _selected_delete_checkpoint_ids(self) -> list[str]:
+        selected_edge_id = self.graph_widget.selected_edge_id
+        if selected_edge_id is not None:
+            edge = self.graph_widget.edge_for_id(selected_edge_id)
+            if edge is not None:
+                return [edge.target_checkpoint.checkpoint_id]
+
+        checkpoint_ids = [
+            node.checkpoint.checkpoint_id
+            for node in self.graph_widget.selected_nodes()
+            if node.checkpoint is not None
+        ]
+        if checkpoint_ids:
+            return checkpoint_ids
+
+        checkpoint = self.selected_checkpoint()
+        return [] if checkpoint is None else [checkpoint.checkpoint_id]
 
     def _checkpoint_export_payload(self, checkpoint: Checkpoint) -> dict[str, object]:
         return checkpoint.to_dict()

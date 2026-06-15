@@ -221,6 +221,106 @@ class TrainingService(QObject):
         self.history_changed.emit()
         return deepcopy(imported_checkpoint)
 
+    def delete_checkpoint_tree(self, checkpoint_ids: list[str] | tuple[str, ...] | set[str]) -> list[str]:
+        if self._has_live_runs():
+            msg = "Cannot delete checkpoints while training is active."
+            raise RuntimeError(msg)
+
+        root_ids = {str(checkpoint_id) for checkpoint_id in checkpoint_ids if str(checkpoint_id)}
+        known_ids = {checkpoint.checkpoint_id for checkpoint in self._checkpoints}
+        root_ids &= known_ids
+        if not root_ids:
+            return []
+
+        deleted_ids = self._descendant_checkpoint_ids(root_ids)
+        deleted_checkpoints = [
+            checkpoint
+            for checkpoint in self._checkpoints
+            if checkpoint.checkpoint_id in deleted_ids
+        ]
+        self._checkpoints = [
+            checkpoint
+            for checkpoint in self._checkpoints
+            if checkpoint.checkpoint_id not in deleted_ids
+        ]
+
+        removed_run_ids = self._orphaned_run_ids_after_checkpoint_delete(
+            deleted_checkpoints=deleted_checkpoints,
+            deleted_checkpoint_ids=deleted_ids,
+        )
+        self._purge_run_records(removed_run_ids)
+
+        self._checkpoint_counter = self._next_checkpoint_counter_floor()
+        self.history_changed.emit()
+        return sorted(deleted_ids)
+
+    def _descendant_checkpoint_ids(self, root_ids: set[str]) -> set[str]:
+        deleted_ids = set(root_ids)
+        changed = True
+        while changed:
+            changed = False
+            for checkpoint in self._checkpoints:
+                if checkpoint.checkpoint_id in deleted_ids:
+                    continue
+                if checkpoint.parent_checkpoint_id in deleted_ids:
+                    deleted_ids.add(checkpoint.checkpoint_id)
+                    changed = True
+        return deleted_ids
+
+    def _orphaned_run_ids_after_checkpoint_delete(
+        self,
+        *,
+        deleted_checkpoints: list[Checkpoint],
+        deleted_checkpoint_ids: set[str],
+    ) -> set[str]:
+        surviving_run_ids = {
+            checkpoint.run_id
+            for checkpoint in self._checkpoints
+            if checkpoint.run_id is not None
+        }
+        candidate_run_ids = {
+            checkpoint.run_id
+            for checkpoint in deleted_checkpoints
+            if checkpoint.run_id is not None
+        }
+        candidate_run_ids.update(
+            run.run_id
+            for run in self._runs
+            if run.parent_checkpoint_id in deleted_checkpoint_ids
+        )
+        for checkpoint in deleted_checkpoints:
+            evaluation = checkpoint.metadata.get("evaluation")
+            if isinstance(evaluation, dict):
+                run_id = evaluation.get("run_id")
+                if isinstance(run_id, str) and run_id:
+                    candidate_run_ids.add(run_id)
+        return candidate_run_ids - surviving_run_ids
+
+    def _purge_run_records(self, run_ids: set[str]) -> None:
+        if not run_ids:
+            return
+
+        for run_id in run_ids:
+            context = self._run_contexts.pop(run_id, None)
+            if context is not None:
+                try:
+                    context.runner.stop()
+                except Exception:
+                    pass
+            self._runs_by_id.pop(run_id, None)
+            self._episodes_by_run.pop(run_id, None)
+            self._pending_episodes_by_run.pop(run_id, None)
+            self._run_task_snapshots.pop(run_id, None)
+
+        self._runs = [run for run in self._runs if run.run_id not in run_ids]
+        self._current_session_run_ids = [
+            run_id for run_id in self._current_session_run_ids if run_id not in run_ids
+        ]
+        if self._primary_live_run_id in run_ids:
+            self._primary_live_run_id = None
+        if self._primary_live_run_id is None:
+            self._runner = None
+
     def evaluate_checkpoint(self, checkpoint_id: str, evaluation_policy: dict[str, Any]) -> Checkpoint:
         if self._has_live_runs():
             msg = "Cannot evaluate a checkpoint while training is active."

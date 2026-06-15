@@ -532,6 +532,46 @@ def test_checkpoint_history_view_emits_manual_evaluation_for_selected_checkpoint
     assert captured[0].checkpoint_id == "checkpoint_004"
 
 
+def test_checkpoint_history_view_emits_delete_for_selected_checkpoints() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    checkpoint_a = Checkpoint(
+        checkpoint_id="checkpoint_a",
+        label="Checkpoint A",
+        created_at="2026-04-28 11:30:00",
+        reason="run_finished",
+        run_id="run_a",
+        task_name="Task A",
+        step=10,
+        episode=1,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Task A"),
+    )
+    checkpoint_b = Checkpoint(
+        checkpoint_id="checkpoint_b",
+        label="Checkpoint B",
+        created_at="2026-04-28 11:31:00",
+        reason="run_finished",
+        parent_checkpoint_id="checkpoint_a",
+        run_id="run_b",
+        task_name="Task B",
+        step=20,
+        episode=2,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Task B"),
+    )
+    captured: list[list[str]] = []
+    view.checkpoint_delete_requested.connect(captured.append)
+    view.set_history(TrainingHistorySnapshot([], [checkpoint_a, checkpoint_b], {}, {}))
+    view.graph_widget.select_node("checkpoint_a")
+    view.graph_widget.select_node("checkpoint_b", additive=True)
+    node_b = view.graph_widget.node_for_id("checkpoint_b")
+    assert node_b is not None
+    view._show_node_details(node_b)
+
+    view.delete_checkpoint_button.click()
+
+    assert captured == [["checkpoint_a", "checkpoint_b"]]
+
+
 def test_checkpoint_history_view_shows_q_table_for_q_learning_node() -> None:
     _app()
     view = CheckpointHistoryView()

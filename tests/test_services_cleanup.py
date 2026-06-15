@@ -776,6 +776,108 @@ def test_training_service_evaluate_checkpoint_rejects_unknown_or_missing_learner
         service.evaluate_checkpoint("checkpoint_no_learner", {})
 
 
+def test_training_service_delete_checkpoint_tree_purges_descendant_runs_and_traces() -> None:
+    service = TrainingService(_history_registry())
+    task_snapshot = TaskSnapshot(environment_id="tiny_env", task_name="Tiny Task", task_id="task_tiny")
+    runs = [
+        TrainingRun(run_id="run_001", task_id="task_tiny", status=TrainingStatus.FINISHED),
+        TrainingRun(
+            run_id="run_002",
+            task_id="task_tiny",
+            status=TrainingStatus.FINISHED,
+            parent_checkpoint_id="checkpoint_001",
+        ),
+        TrainingRun(
+            run_id="run_003",
+            task_id="task_tiny",
+            status=TrainingStatus.FINISHED,
+            parent_checkpoint_id="checkpoint_002",
+        ),
+    ]
+    checkpoints = [
+        Checkpoint(
+            checkpoint_id="checkpoint_001",
+            label="Checkpoint 001",
+            created_at="2026-06-11 10:00:00",
+            reason="run_finished",
+            run_id="run_001",
+            task_snapshot=task_snapshot,
+            metadata={"learner_state": {"q_values": [{"state_key": "0", "action": 0, "value": 1.0}]}},
+        ),
+        Checkpoint(
+            checkpoint_id="checkpoint_002",
+            label="Checkpoint 002",
+            created_at="2026-06-11 10:01:00",
+            reason="run_finished",
+            parent_checkpoint_id="checkpoint_001",
+            run_id="run_002",
+            task_snapshot=task_snapshot,
+            metadata={
+                "learner_state": {"q_values": [{"state_key": "1", "action": 0, "value": 2.0}]},
+                "evaluation": {"run_id": "eval_checkpoint_002"},
+            },
+        ),
+        Checkpoint(
+            checkpoint_id="checkpoint_003",
+            label="Checkpoint 003",
+            created_at="2026-06-11 10:02:00",
+            reason="run_finished",
+            parent_checkpoint_id="checkpoint_002",
+            run_id="run_003",
+            task_snapshot=task_snapshot,
+            metadata={"learner_state": {"q_values": [{"state_key": "2", "action": 0, "value": 3.0}]}},
+        ),
+    ]
+    service.load_history(
+        TrainingHistorySnapshot(
+            runs=runs,
+            checkpoints=checkpoints,
+            episodes_by_run={
+                "run_001": [EpisodeTrace(episode_id=1, run_id="run_001", total_reward=1.0, success=True)],
+                "run_002": [EpisodeTrace(episode_id=1, run_id="run_002", total_reward=2.0, success=True)],
+                "run_003": [EpisodeTrace(episode_id=1, run_id="run_003", total_reward=3.0, success=True)],
+                "eval_checkpoint_002": [
+                    EpisodeTrace(
+                        episode_id=1,
+                        run_id="eval_checkpoint_002",
+                        total_reward=4.0,
+                        success=True,
+                    )
+                ],
+            },
+            run_task_snapshots={
+                "run_001": task_snapshot,
+                "run_002": task_snapshot,
+                "run_003": task_snapshot,
+                "eval_checkpoint_002": task_snapshot,
+            },
+        )
+    )
+    service._pending_episodes_by_run["run_002"] = [
+        EpisodeTrace(episode_id=2, run_id="run_002", total_reward=2.0, success=True)
+    ]
+    service._pending_episodes_by_run["eval_checkpoint_002"] = [
+        EpisodeTrace(
+            episode_id=2,
+            run_id="eval_checkpoint_002",
+            total_reward=4.0,
+            success=True,
+        )
+    ]
+
+    deleted_ids = service.delete_checkpoint_tree(["checkpoint_002"])
+    snapshot = service.history_snapshot()
+
+    assert deleted_ids == ["checkpoint_002", "checkpoint_003"]
+    assert [checkpoint.checkpoint_id for checkpoint in snapshot.checkpoints] == ["checkpoint_001"]
+    assert [run.run_id for run in snapshot.runs] == ["run_001"]
+    assert set(snapshot.episodes_by_run) == {"run_001"}
+    assert set(service._pending_episodes_by_run) == {"run_001"}
+    assert set(snapshot.run_task_snapshots) == {"run_001"}
+    assert "run_002" not in service._runs_by_id
+    assert "run_003" not in service._runs_by_id
+
+
 def test_training_service_records_evaluation_error_and_clears_stale_eval_traces() -> None:
     service = TrainingService(_history_registry())
     evaluation_task = TaskDefinition(environment_id="tiny_env", name="Bad Evaluation Task", task_id="task_eval_bad")
