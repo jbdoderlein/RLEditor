@@ -40,7 +40,7 @@ RQ1_HOLE_DENSITIES: list[float] = [0.10, 0.20, 0.30, 0.40]
 
 RQ1_BASE_SEED: int = 57
 
-_OUTPUT_DIR: Path = Path(__file__).parent / "curricula" / "rq1"
+_OUTPUT_DIR: Path = Path(__file__).parent / "curricula" / f"rq1_seed{RQ1_BASE_SEED}"
 
 
 # ---------------------------------------------------------------------------
