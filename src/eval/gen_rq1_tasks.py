@@ -21,26 +21,18 @@ from math import comb
 from pathlib import Path
 from typing import Any
 
+from eval_config import (
+    DEFAULT_REWARD_CONFIG,
+    GRID_SIZE,
+    IS_SLIPPERY,
+    RQ1_HOLE_DENSITIES,
+    RQ1_SEED,
+    SUCCESS_RATE,
+)
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+RQ1_BASE_SEED = RQ1_SEED  # alias kept for clarity within this script
 
-GRID_SIZE: int = 12
-IS_SLIPPERY: bool = False
-SUCCESS_RATE: float = 1.0 / 3.0
-DEFAULT_REWARD_CONFIG: dict[str, float] = {
-    "tile:F": 0.0,
-    "tile:G": 1.0,
-    "tile:H": 0.0,
-    "tile:S": 0.0,
-}
-
-RQ1_HOLE_DENSITIES: list[float] = [0.10, 0.20, 0.30, 0.40]
-
-RQ1_BASE_SEED: int = 121
-
-_OUTPUT_DIR: Path = Path(__file__).parent / "curricula" / f"rq1_seed{RQ1_BASE_SEED}"
+_OUTPUT_DIR: Path = Path(__file__).parent / "curricula" / f"rq1_seed{RQ1_SEED}"
 
 
 # ---------------------------------------------------------------------------
