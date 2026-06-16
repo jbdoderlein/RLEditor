@@ -37,7 +37,7 @@ from rleditor.core.models import (
 from rleditor.plugins.base import EnvironmentPlugin
 from rleditor.plugins.registry import PluginRegistry
 from rleditor.ui.views.checkpoint_history_view import CheckpointHistoryView
-from rleditor.ui.views.evaluation_view import EvaluationResultsDialog, EvaluationView
+from rleditor.ui.views.evaluation_view import EvaluationView
 from rleditor.ui.views.episode_inspector_view import EpisodeInspectorView
 from rleditor.ui.interaction_logging import InteractionLogger
 from rleditor.ui.views.task_editor_view import TaskEditorView
@@ -727,45 +727,63 @@ class MainWindow(QMainWindow):
         )
 
     def _on_multiple_evaluation_requested(self) -> None:
-        checkpoint = self.history_view.selected_checkpoint()
-        if checkpoint is None:
-            self.statusBar().showMessage("Cannot evaluate multiple tasks: no checkpoint selected")
+        selected_tasks = self.evaluation_view.selected_evaluation_tasks()
+        if not selected_tasks:
+            self.statusBar().showMessage("Cannot train multiple tasks: no task selected")
             return
 
+        training_episodes = self.evaluation_view.multiple_training_episode_count()
         policies = self.evaluation_view.build_multiple_evaluation_policies()
-        if not policies:
-            self.statusBar().showMessage("Cannot evaluate multiple tasks: no evaluation task selected")
-            return
+        configs: list[RunConfig] = []
+        for policy in policies:
+            config = RunConfig(
+                algorithm="q_learning",
+                episode_trace_sample_rate=1.0,
+                max_steps=None,
+                max_episodes=training_episodes,
+                max_steps_per_episode=DEFAULT_MAX_STEPS_PER_EPISODE,
+                learning_rate=0.1,
+                gamma=0.99,
+            )
+            config.evaluation_policy = policy
+            configs.append(config)
 
+        selected_checkpoint = self.history_view.selected_checkpoint()
+        start_from_scratch = self.history_view.start_from_scratch_selected()
         try:
-            self._set_status_busy("evaluation", True)
-            rows = self._training_service.evaluate_checkpoint_multiple(
-                checkpoint.checkpoint_id,
-                policies,
+            self._training_service.start_many_with_configs(
+                selected_tasks,
+                configs,
+                initial_checkpoint=selected_checkpoint,
+                start_from_scratch=start_from_scratch,
+                run_in_background=True,
             )
         except RuntimeError as exc:
             self.statusBar().showMessage(str(exc))
             return
-        finally:
-            self._set_status_busy("evaluation", False)
 
-        dialog = EvaluationResultsDialog(rows, self)
-        dialog.exec()
-        failed_count = sum(1 for row in rows if row.get("error"))
-        if failed_count:
-            self.statusBar().showMessage(
-                f"Multiple evaluation completed for {checkpoint.checkpoint_id}: "
-                f"{len(rows) - failed_count}/{len(rows)} succeeded"
-            )
-        else:
-            self.statusBar().showMessage(
-                f"Multiple evaluation completed for {checkpoint.checkpoint_id}: {len(rows)} task(s)"
-            )
+        self._set_status_busy("training", True)
+        self.episode_view.clear_episodes()
+        self.statusBar().showMessage(
+            f"Batch training started on {len(selected_tasks)} task(s); each result will be evaluated on its own task"
+        )
         self._log_interaction(
-            "checkpoint_multiple_evaluated",
-            checkpoint_id=checkpoint.checkpoint_id,
-            evaluation_count=len(rows),
-            failed_count=failed_count,
+            "multiple_task_adaptation_started",
+            task_count=len(selected_tasks),
+            training_episodes=training_episodes,
+            max_steps_per_episode=DEFAULT_MAX_STEPS_PER_EPISODE,
+            initial_checkpoint_id=(
+                selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
+            ),
+            start_from_scratch=start_from_scratch,
+            tasks=[
+                {
+                    "task_id": task.task_id,
+                    "name": task.name,
+                    "environment_id": task.environment_id,
+                }
+                for task in selected_tasks
+            ],
         )
 
     def _on_curriculum_import_requested(self, payload: object) -> None:

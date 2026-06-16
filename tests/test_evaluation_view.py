@@ -83,6 +83,7 @@ def test_evaluation_view_builds_multiple_policies_from_checked_tasks() -> None:
     view.episode_count_spin.setValue(9)
     view.max_steps_per_episode_spin.setValue(45)
     view.seed_spin.setValue(77)
+    view.multi_training_episode_count_spin.setValue(321)
 
     policies = view.build_multiple_evaluation_policies()
 
@@ -91,6 +92,7 @@ def test_evaluation_view_builds_multiple_policies_from_checked_tasks() -> None:
     assert policies[0]["episode_count"] == 9
     assert policies[0]["max_steps_per_episode"] == 45
     assert policies[0]["seed"] == 77
+    assert view.multiple_training_episode_count() == 321
     assert view.evaluate_multiple_button.isEnabled()
 
 

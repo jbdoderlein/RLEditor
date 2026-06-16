@@ -1393,7 +1393,7 @@ def test_checkpoint_history_live_edit_planning_avoids_deep_history_snapshot() ->
     assert captured_start["kwargs"]["initial_checkpoint"] is edge.source_checkpoint
 
 
-def test_multiple_evaluation_button_runs_selected_checkpoint_on_checked_tasks(monkeypatch) -> None:
+def test_multiple_evaluation_button_starts_training_on_checked_tasks_with_self_evaluation(monkeypatch) -> None:
     _app()
     registry = PluginRegistry()
     registry.register_environment(
@@ -1423,6 +1423,10 @@ def test_multiple_evaluation_button_runs_selected_checkpoint_on_checked_tasks(mo
     window._add_task_to_workspace(second_task, select=False)
     for checkbox, _task_index in window.evaluation_view._multi_task_checkboxes:
         checkbox.setChecked(True)
+    window.evaluation_view.episode_count_spin.setValue(6)
+    window.evaluation_view.max_steps_per_episode_spin.setValue(55)
+    window.evaluation_view.seed_spin.setValue(42)
+    window.evaluation_view.multi_training_episode_count_spin.setValue(123)
     checkpoint = Checkpoint(
         checkpoint_id="checkpoint_eval",
         label="Checkpoint Eval",
@@ -1434,55 +1438,36 @@ def test_multiple_evaluation_button_runs_selected_checkpoint_on_checked_tasks(mo
 
     captured: dict[str, object] = {}
 
-    def _evaluate_many(checkpoint_id, policies):
-        captured["checkpoint_id"] = checkpoint_id
-        captured["policies"] = policies
-        return [
-            {
-                "task_name": "Dummy Main Task",
-                "environment_id": "dummy_env",
-                "episode_count": 2,
-                "success_rate": 1.0,
-                "mean_reward": 1.0,
-                "cumulative_reward": 2.0,
-                "episode_length_mean": 3.0,
-                "step": 6,
-                "error": "",
-            }
-        ]
+    def _start_many_with_configs(tasks, configs, **kwargs):
+        captured["tasks"] = tasks
+        captured["configs"] = configs
+        captured["kwargs"] = kwargs
 
-    shown: dict[str, object] = {}
-
-    class _FakeEvaluationResultsDialog:
-        def __init__(self, rows, parent=None):
-            shown["rows"] = rows
-            shown["parent"] = parent
-
-        def exec(self):
-            shown["exec"] = True
-            return 0
-
-    training_service.evaluate_checkpoint_multiple = _evaluate_many  # type: ignore[method-assign]
-    monkeypatch.setattr(
-        "rleditor.ui.shell.main_window.EvaluationResultsDialog",
-        _FakeEvaluationResultsDialog,
-    )
+    training_service.start_many_with_configs = _start_many_with_configs  # type: ignore[method-assign]
 
     window.evaluation_view.evaluate_multiple_button.click()
 
-    assert captured["checkpoint_id"] == "checkpoint_eval"
-    policies = captured["policies"]
-    assert [policy["task"]["name"] for policy in policies] == ["Dummy Main Task", "Second Eval"]
-    assert shown["rows"][0]["task_name"] == "Dummy Main Task"
-    assert shown["parent"] is window
-    assert shown["exec"] is True
-    assert "Multiple evaluation completed for checkpoint_eval" in window.statusBar().currentMessage()
+    assert [task.name for task in captured["tasks"]] == ["Dummy Main Task", "Second Eval"]
+    configs = captured["configs"]
+    assert [config.max_episodes for config in configs] == [123, 123]
+    assert [config.max_steps_per_episode for config in configs] == [100, 100]
+    assert [config.evaluation_policy["task"]["name"] for config in configs] == [
+        "Dummy Main Task",
+        "Second Eval",
+    ]
+    assert [config.evaluation_policy["episode_count"] for config in configs] == [6, 6]
+    assert [config.evaluation_policy["max_steps_per_episode"] for config in configs] == [55, 55]
+    assert [config.evaluation_policy["seed"] for config in configs] == [42, 42]
+    assert captured["kwargs"]["initial_checkpoint"] is checkpoint
+    assert captured["kwargs"]["run_in_background"] is True
+    assert "Batch training started on 2 task(s)" in window.statusBar().currentMessage()
     logged = [
         payload
         for event, payload in interaction_logger.records
-        if event == "checkpoint_multiple_evaluated"
+        if event == "multiple_task_adaptation_started"
     ]
-    assert logged[-1]["evaluation_count"] == 1
+    assert logged[-1]["task_count"] == 2
+    assert logged[-1]["training_episodes"] == 123
 
 
 def test_checkpoint_history_delete_removes_selected_checkpoint_subtree() -> None:

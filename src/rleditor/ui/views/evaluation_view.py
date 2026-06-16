@@ -153,8 +153,15 @@ class EvaluationView(QWidget):
         form.addRow("Max steps / episode", self.max_steps_per_episode_spin)
         form.addRow("Seed", self.seed_spin)
 
-        self.multi_eval_group = QGroupBox("Multiple Evaluation", self)
+        self.multi_eval_group = QGroupBox("Batch Training + Evaluation", self)
         multi_eval_layout = QVBoxLayout(self.multi_eval_group)
+        multi_eval_form = QFormLayout()
+        self.multi_training_episode_count_spin = QSpinBox(self.multi_eval_group)
+        self.multi_training_episode_count_spin.setRange(1, 100_000)
+        self.multi_training_episode_count_spin.setValue(1000)
+        self.multi_training_episode_count_spin.setToolTip(
+            "Number of training episodes for each checked task before its evaluation runs."
+        )
         self.multi_task_list_widget = QWidget(self.multi_eval_group)
         self.multi_task_list_layout = QVBoxLayout(self.multi_task_list_widget)
         self.multi_task_list_layout.setContentsMargins(0, 0, 0, 0)
@@ -162,12 +169,14 @@ class EvaluationView(QWidget):
         self.multi_task_scroll.setWidgetResizable(True)
         self.multi_task_scroll.setMinimumHeight(120)
         self.multi_task_scroll.setWidget(self.multi_task_list_widget)
-        self.evaluate_multiple_button = QPushButton("Evaluate Multiple", self.multi_eval_group)
+        self.evaluate_multiple_button = QPushButton("Train + Evaluate Multiple", self.multi_eval_group)
         self.evaluate_multiple_button.setEnabled(False)
         self.evaluate_multiple_button.clicked.connect(self.evaluate_multiple_requested.emit)
+        multi_eval_form.addRow("Training episodes", self.multi_training_episode_count_spin)
         multi_action_row = QHBoxLayout()
         multi_action_row.addWidget(self.evaluate_multiple_button)
         multi_action_row.addStretch(1)
+        multi_eval_layout.addLayout(multi_eval_form)
         multi_eval_layout.addWidget(self.multi_task_scroll)
         multi_eval_layout.addLayout(multi_action_row)
 
@@ -247,6 +256,9 @@ class EvaluationView(QWidget):
             self._evaluation_policy_for_task(task)
             for task in self.selected_evaluation_tasks()
         ]
+
+    def multiple_training_episode_count(self) -> int:
+        return self.multi_training_episode_count_spin.value()
 
     def _evaluation_policy_for_task(self, task: TaskDefinition) -> dict[str, object]:
         max_steps = self.max_steps_per_episode_spin.value()
