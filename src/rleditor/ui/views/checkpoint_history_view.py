@@ -6,6 +6,7 @@ import json
 from math import hypot
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPainterPath, QPen
 from PySide6.QtWidgets import (
@@ -34,6 +35,10 @@ from PySide6.QtWidgets import (
 
 from rleditor.application.services import TrainingHistorySnapshot
 from rleditor.core.models import Checkpoint, EpisodeTrace, RunConfig, TaskSnapshot, TrainingRun
+from rleditor.infra.stable_baselines_backend import (
+    is_stable_baselines3_algorithm,
+    load_stable_baselines3_model,
+)
 
 
 FROZEN_LAKE_ACTION_SYMBOLS = {
@@ -172,6 +177,121 @@ class _QTableDialog(QDialog):
         best_value = max(value for _action, value in values)
         best_actions = [action for action, value in values if value == best_value]
         return min(best_actions)
+
+
+class _SB3PolicyDialog(QDialog):
+    def __init__(self, checkpoint: Checkpoint, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Policy - {checkpoint.label or checkpoint.checkpoint_id}")
+        self.resize(900, 620)
+
+        self._checkpoint = checkpoint
+        self._map_rows = _frozen_lake_map_rows(checkpoint)
+        self._actions: dict[int, int] = {}
+        self._load_error: str | None = None
+        self.policy_cells: dict[tuple[int, int], QLabel] = {}
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel(self._summary_text(), self))
+
+        if self._map_rows is None:
+            root.addWidget(
+                QLabel("Policy map display is available for FrozenLake SB3 checkpoints.", self),
+                1,
+            )
+        else:
+            self._actions = self._predict_frozen_lake_actions()
+            if self._load_error is not None:
+                error_label = QLabel(f"Could not load SB3 policy: {self._load_error}", self)
+                error_label.setWordWrap(True)
+                root.addWidget(error_label, 1)
+            else:
+                root.addWidget(QLabel("FrozenLake greedy policy map: deterministic model action per state", self))
+                root.addWidget(self._build_policy_map(), 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def _summary_text(self) -> str:
+        algorithm = self._checkpoint.metadata.get("algorithm")
+        return f"Checkpoint: {self._checkpoint.checkpoint_id} | algorithm: {algorithm or 'unknown'}"
+
+    def _predict_frozen_lake_actions(self) -> dict[int, int]:
+        assert self._map_rows is not None
+        learner_state = self._checkpoint.metadata.get("learner_state")
+        if not isinstance(learner_state, dict):
+            self._load_error = "missing learner state"
+            return {}
+
+        algorithm = str(self._checkpoint.metadata.get("algorithm") or learner_state.get("algorithm") or "")
+        try:
+            model = load_stable_baselines3_model(
+                algorithm=algorithm,
+                env=None,
+                learner_state=learner_state,
+            )
+        except Exception as exc:
+            self._load_error = str(exc)
+            return {}
+
+        state_count = len(self._map_rows) * len(self._map_rows[0])
+        actions: dict[int, int] = {}
+        for state_index in range(state_count):
+            action = self._predict_action(model, state_index)
+            if action is not None:
+                actions[state_index] = action
+        return actions
+
+    def _predict_action(self, model: object, state_index: int) -> int | None:
+        predict = getattr(model, "predict", None)
+        if not callable(predict):
+            self._load_error = "loaded learner does not expose predict()"
+            return None
+
+        observation_candidates = (
+            state_index,
+            np.asarray(state_index, dtype=np.int64),
+            np.asarray([state_index], dtype=np.int64),
+        )
+        last_error: Exception | None = None
+        for observation in observation_candidates:
+            try:
+                action, _state = predict(observation, deterministic=True)
+                return _coerce_policy_action(action)
+            except Exception as exc:
+                last_error = exc
+        if last_error is not None:
+            self._load_error = str(last_error)
+        return None
+
+    def _build_policy_map(self) -> QWidget:
+        assert self._map_rows is not None
+
+        host = QWidget(self)
+        grid = QGridLayout(host)
+        grid.setHorizontalSpacing(4)
+        grid.setVerticalSpacing(4)
+
+        for row, map_row in enumerate(self._map_rows):
+            for col, tile in enumerate(map_row):
+                state_index = row * len(map_row) + col
+                action = self._actions.get(state_index)
+                action_symbol = FROZEN_LAKE_ACTION_SYMBOLS.get(action, "-") if action is not None else "-"
+                label = QLabel(f"{tile}\n{action_symbol}", host)
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                label.setMinimumSize(62, 52)
+                label.setStyleSheet(
+                    "QLabel { "
+                    "background: #eff6ff; "
+                    "border: 1px solid #cbd5e1; border-radius: 4px; "
+                    "font-weight: 600; color: #0f172a; "
+                    "}"
+                )
+                self.policy_cells[(row, col)] = label
+                grid.addWidget(label, row, col)
+
+        return host
 
 
 class _TrainingEdgeEditDialog(QDialog):
@@ -601,6 +721,42 @@ def _checkpoint_has_q_learning_state(checkpoint: Checkpoint | None) -> bool:
         return True
     learner_state = metadata.get("learner_state")
     return isinstance(learner_state, dict) and learner_state.get("algorithm") == "q_learning"
+
+
+def _checkpoint_has_sb3_policy_state(checkpoint: Checkpoint | None) -> bool:
+    if checkpoint is None:
+        return False
+    metadata = checkpoint.metadata
+    algorithm = str(metadata.get("algorithm", ""))
+    if not is_stable_baselines3_algorithm(algorithm):
+        return False
+    learner_state = metadata.get("learner_state")
+    return (
+        isinstance(learner_state, dict)
+        and learner_state.get("backend") == "stable_baselines3"
+        and isinstance(learner_state.get("model_zip_base64"), str)
+    )
+
+
+def _coerce_policy_action(action: object) -> int | None:
+    if hasattr(action, "item") and callable(getattr(action, "item")):
+        try:
+            return int(action.item())
+        except (TypeError, ValueError):
+            return None
+    if hasattr(action, "tolist") and callable(getattr(action, "tolist")):
+        try:
+            action = action.tolist()
+        except Exception:
+            return None
+    if isinstance(action, list | tuple):
+        if not action:
+            return None
+        return _coerce_policy_action(action[0])
+    try:
+        return int(action)
+    except (TypeError, ValueError):
+        return None
 
 
 def _frozen_lake_map_rows(checkpoint: Checkpoint) -> list[str] | None:
@@ -1040,6 +1196,7 @@ class CheckpointHistoryView(QWidget):
         self._current_segment_episodes: list[EpisodeTrace] = []
         self._selected_start_node_id: str | None = None
         self._q_table_checkpoint: Checkpoint | None = None
+        self._sb3_policy_checkpoint: Checkpoint | None = None
 
         root = QVBoxLayout(self)
 
@@ -1110,6 +1267,12 @@ class CheckpointHistoryView(QWidget):
         )
         self.show_q_table_button.setEnabled(False)
         self.show_q_table_button.setVisible(False)
+        self.show_policy_button = QPushButton("Show Policy", right_panel)
+        self.show_policy_button.setToolTip(
+            "Open the deterministic greedy policy map for the selected SB3 checkpoint."
+        )
+        self.show_policy_button.setEnabled(False)
+        self.show_policy_button.setVisible(False)
         self.import_checkpoint_button = QPushButton("Import Checkpoint", right_panel)
         self.import_checkpoint_button.setToolTip(
             "Import one checkpoint JSON into the current history."
@@ -1160,6 +1323,7 @@ class CheckpointHistoryView(QWidget):
         trace_buttons_layout.addWidget(self.export_curriculum_button)
         trace_buttons_layout.addWidget(self.evaluate_checkpoint_button)
         trace_buttons_layout.addWidget(self.show_q_table_button)
+        trace_buttons_layout.addWidget(self.show_policy_button)
         trace_buttons_layout.addStretch(1)
 
         actions_layout.addLayout(plan_buttons_layout)
@@ -1194,6 +1358,7 @@ class CheckpointHistoryView(QWidget):
         self.evaluate_checkpoint_button.clicked.connect(self._emit_evaluate_selected_checkpoint)
         self.live_edit_button.clicked.connect(self._request_live_edit_for_selected_edge)
         self.show_q_table_button.clicked.connect(self._show_selected_q_table)
+        self.show_policy_button.clicked.connect(self._show_selected_policy)
         self.import_checkpoint_button.clicked.connect(self._import_checkpoint_from_file)
         self.import_curriculum_button.clicked.connect(self._import_curriculum_from_file)
 
@@ -1278,6 +1443,7 @@ class CheckpointHistoryView(QWidget):
         self._set_export_buttons_enabled(False)
         self._set_live_edit_button_enabled(False)
         self._set_q_table_checkpoint(None)
+        self._set_sb3_policy_checkpoint(None)
 
     def _render_empty_segment_selection(self) -> None:
         self.segment_group.setTitle("Run Episodes")
@@ -1292,6 +1458,7 @@ class CheckpointHistoryView(QWidget):
         self.details_group.setTitle("Node Details")
         self._selected_start_node_id = node.node_id
         self._set_q_table_checkpoint(node.checkpoint)
+        self._set_sb3_policy_checkpoint(node.checkpoint)
         selected_nodes = self.graph_widget.selected_nodes()
         if node.node_id not in {selected_node.node_id for selected_node in selected_nodes}:
             selected_nodes = [node]
@@ -1321,6 +1488,7 @@ class CheckpointHistoryView(QWidget):
             self._set_export_buttons_enabled(False)
             self._set_live_edit_button_enabled(False)
             self._set_q_table_checkpoint(None)
+            self._set_sb3_policy_checkpoint(None)
             return
 
         checkpoint = node.checkpoint
@@ -1338,6 +1506,7 @@ class CheckpointHistoryView(QWidget):
         self.details_group.setTitle("Training Details")
         self.segment_group.setTitle("Training Run")
         self._set_q_table_checkpoint(None)
+        self._set_sb3_policy_checkpoint(None)
         checkpoint = edge.target_checkpoint
         run = edge.run
         self._set_export_buttons_enabled(True)
@@ -1513,6 +1682,12 @@ class CheckpointHistoryView(QWidget):
         self.show_q_table_button.setVisible(enabled)
         self.show_q_table_button.setEnabled(enabled)
 
+    def _set_sb3_policy_checkpoint(self, checkpoint: Checkpoint | None) -> None:
+        enabled = _checkpoint_has_sb3_policy_state(checkpoint)
+        self._sb3_policy_checkpoint = checkpoint if enabled else None
+        self.show_policy_button.setVisible(enabled)
+        self.show_policy_button.setEnabled(enabled)
+
     def _show_selected_q_table(self) -> None:
         if self._q_table_checkpoint is None:
             return
@@ -1520,6 +1695,14 @@ class CheckpointHistoryView(QWidget):
 
     def _build_q_table_dialog(self, checkpoint: Checkpoint) -> _QTableDialog:
         return _QTableDialog(checkpoint, self)
+
+    def _show_selected_policy(self) -> None:
+        if self._sb3_policy_checkpoint is None:
+            return
+        self._build_policy_dialog(self._sb3_policy_checkpoint).exec()
+
+    def _build_policy_dialog(self, checkpoint: Checkpoint) -> _SB3PolicyDialog:
+        return _SB3PolicyDialog(checkpoint, self)
 
     def _show_training_report_for_selected_checkpoint(self) -> None:
         checkpoints = self._selected_training_report_checkpoints()

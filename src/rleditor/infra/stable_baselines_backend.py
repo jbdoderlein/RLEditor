@@ -371,7 +371,7 @@ def export_stable_baselines3_learner_state(model: Any, *, algorithm: str) -> dic
 def load_stable_baselines3_model(
     *,
     algorithm: str,
-    env: gym.Env,
+    env: gym.Env | None,
     learner_state: dict[str, Any],
 ) -> Any:
     model = _load_model_from_learner_state(
@@ -387,7 +387,7 @@ def load_stable_baselines3_model(
 def _load_model_from_learner_state(
     *,
     algorithm: str,
-    env: gym.Env,
+    env: gym.Env | None,
     learner_state: dict[str, Any],
 ) -> Any | None:
     encoded = learner_state.get("model_zip_base64")

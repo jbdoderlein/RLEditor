@@ -615,6 +615,61 @@ def test_checkpoint_history_view_shows_q_table_for_q_learning_node() -> None:
         dialog.close()
 
 
+def test_checkpoint_history_view_shows_sb3_policy_map_for_frozen_lake_checkpoint(monkeypatch) -> None:
+    _app()
+
+    class _FakeModel:
+        def predict(self, observation, *, deterministic: bool):
+            assert deterministic is True
+            return int(observation) % 4, None
+
+    def _load_model(*, algorithm, env, learner_state):
+        assert algorithm == "sb3_dqn"
+        assert env is None
+        assert learner_state["backend"] == "stable_baselines3"
+        return _FakeModel()
+
+    monkeypatch.setattr(
+        "rleditor.ui.views.checkpoint_history_view.load_stable_baselines3_model",
+        _load_model,
+    )
+    view = CheckpointHistoryView()
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_sb3",
+        label="SB3 checkpoint",
+        created_at="2026-04-28 11:30:00",
+        reason="run_finished",
+        run_id="run_sb3",
+        task_name="Frozen Lake",
+        step=12,
+        episode=2,
+        task_snapshot=TaskSnapshot(
+            environment_id="frozen_lake",
+            task_name="Frozen Lake",
+            task_config={"map_desc": ["SF", "FG"]},
+        ),
+        metadata={
+            "algorithm": "sb3_dqn",
+            "learner_state": {
+                "algorithm": "sb3_dqn",
+                "backend": "stable_baselines3",
+                "model_zip_base64": "abc",
+            },
+        },
+    )
+
+    view.set_history(TrainingHistorySnapshot([], [checkpoint], {}, {}))
+
+    assert view.show_policy_button.isEnabled()
+    assert not view.show_policy_button.isHidden()
+    dialog = view._build_policy_dialog(checkpoint)
+    try:
+        assert dialog.policy_cells[(0, 0)].text() == "S\n←"
+        assert dialog.policy_cells[(0, 1)].text() == "F\n↓"
+    finally:
+        dialog.close()
+
+
 def test_checkpoint_history_view_builds_selected_checkpoint_export_payload() -> None:
     _app()
     view = CheckpointHistoryView()
