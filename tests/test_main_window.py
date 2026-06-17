@@ -860,7 +860,7 @@ def test_curriculum_import_reuses_matching_workspace_task() -> None:
 
 
 @pytest.mark.parametrize("breakpoint_actions", [["checkpoint"], ["pause", "checkpoint"]])
-def test_curriculum_import_stops_after_checkpoint_breakpoint_so_new_training_can_start(
+def test_curriculum_import_ignores_exported_breakpoints_and_runs_episode_budget(
     breakpoint_actions: list[str],
 ) -> None:
     _app()
@@ -889,6 +889,7 @@ def test_curriculum_import_stops_after_checkpoint_breakpoint_so_new_training_can
                 {
                     "env_id": 0,
                     "steps": 100,
+                    "max_episodes": 2,
                     "algorithm": "q_learning",
                     "breakpoints": [
                         {
@@ -911,12 +912,17 @@ def test_curriculum_import_stops_after_checkpoint_breakpoint_so_new_training_can
 
     window._on_curriculum_import_requested(payload)
 
-    _wait_for(lambda: training_service.status == TrainingStatus.STOPPED)
+    _wait_for(lambda: not window._imported_curriculum_active, timeout_seconds=2.0)
 
     assert window._imported_curriculum_active is False
     assert window._imported_curriculum_waiting_for_step is False
     assert not window._imported_curriculum_queue
-    assert len(training_service.history_snapshot().checkpoints) == 1
+    snapshot = training_service.history_snapshot()
+    assert len(snapshot.checkpoints) == 1
+    assert snapshot.checkpoints[-1].episode == 2
+    assert snapshot.runs[-1].metadata["run_config"]["breakpoints"] == []
+    assert snapshot.runs[-1].metadata["run_config"]["metadata"]["ignored_imported_breakpoint_count"] == 1
+    assert "Curriculum execution completed" in window.statusBar().currentMessage()
 
     training_service.start(
         TaskDefinition(environment_id="tiny_env", name="Manual Tiny", task_id="task_manual"),

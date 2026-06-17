@@ -1293,14 +1293,10 @@ class MainWindow(QMainWindow):
             config.epsilon = 1.0
             config.hyperparameters["epsilon"] = 1.0
         config.metadata["imported_curriculum_step"] = True
-        for rule in config.breakpoints:
-            actions = set(rule.actions)
-            if (
-                "checkpoint" in actions
-                and "pause" not in actions
-                and "stop" not in actions
-            ):
-                rule.actions.append("pause")
+        ignored_breakpoint_count = len(config.breakpoints)
+        config.breakpoints = []
+        if ignored_breakpoint_count:
+            config.metadata["ignored_imported_breakpoint_count"] = ignored_breakpoint_count
         return config
 
     def _evaluation_policy_from_curriculum_payload(
