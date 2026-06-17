@@ -818,6 +818,7 @@ def _q_value_color(value: float | None, *, min_value: float, max_value: float) -
 class CheckpointGraphWidget(QWidget):
     node_selected = Signal(object)
     edge_selected = Signal(object)
+    node_double_clicked = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -942,6 +943,18 @@ class CheckpointGraphWidget(QWidget):
         self._selected_edge_id = None
         self.update()
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        position = event.position()
+        for node in reversed(list(self._nodes.values())):
+            if node.rect.contains(position):
+                if node.kind == "checkpoint":
+                    self.select_node(node.node_id)
+                    self.node_selected.emit(node)
+                    self.node_double_clicked.emit(node)
+                    return
+                break
+        super().mouseDoubleClickEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         _ = event
@@ -1133,10 +1146,12 @@ class CheckpointGraphWidget(QWidget):
         return hypot(point.x() - nearest_x, point.y() - nearest_y)
 
     def _checkpoint_title(self, checkpoint: Checkpoint) -> str:
-        checkpoint_id = checkpoint.checkpoint_id.replace("_", " ").title()
-        if len(checkpoint_id) > 24:
-            return checkpoint_id[:21] + "..."
-        return checkpoint_id
+        title = checkpoint.label.strip() if checkpoint.label else ""
+        if not title:
+            title = checkpoint.checkpoint_id.replace("_", " ").title()
+        if len(title) > 24:
+            return title[:21] + "..."
+        return title
 
     def _checkpoint_sort_key(self, checkpoint: Checkpoint) -> tuple[str, str, int, int, str]:
         return (
@@ -1186,6 +1201,7 @@ class CheckpointHistoryView(QWidget):
     checkpoint_import_requested = Signal(object)
     checkpoint_delete_requested = Signal(object)
     checkpoint_evaluation_requested = Signal(object)
+    checkpoint_rename_requested = Signal(object)
     curriculum_import_requested = Signal(object)
     training_run_config_selected = Signal(object)
     training_edge_live_edit_requested = Signal(object, object)
@@ -1346,6 +1362,7 @@ class CheckpointHistoryView(QWidget):
 
         self.graph_widget.node_selected.connect(self._show_node_details)
         self.graph_widget.edge_selected.connect(self._on_edge_selected)
+        self.graph_widget.node_double_clicked.connect(self._emit_rename_checkpoint_for_node)
         self.episode_list.currentRowChanged.connect(self._on_episode_selection_changed)
         self.inspect_episode_button.clicked.connect(self._emit_inspect_selected_episode)
         self.export_curriculum_button.clicked.connect(
@@ -1925,6 +1942,11 @@ class CheckpointHistoryView(QWidget):
             )
             return
         self.checkpoint_evaluation_requested.emit(checkpoint)
+
+    def _emit_rename_checkpoint_for_node(self, node: _LineageNode) -> None:
+        if node.checkpoint is None:
+            return
+        self.checkpoint_rename_requested.emit(node.checkpoint)
 
     def _selected_export_checkpoint(self) -> Checkpoint | None:
         selected_edge_id = self.graph_widget.selected_edge_id

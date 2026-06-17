@@ -221,6 +221,26 @@ class TrainingService(QObject):
         self.history_changed.emit()
         return deepcopy(imported_checkpoint)
 
+    def rename_checkpoint(self, checkpoint_id: str, label: str) -> Checkpoint:
+        if self._has_live_runs():
+            msg = "Cannot rename checkpoints while training is active."
+            raise RuntimeError(msg)
+
+        checkpoint_index = self._checkpoint_index(checkpoint_id)
+        if checkpoint_index is None:
+            msg = f"Unknown checkpoint: {checkpoint_id}"
+            raise RuntimeError(msg)
+
+        checkpoint = deepcopy(self._checkpoints[checkpoint_index])
+        new_label = label.strip() or checkpoint.checkpoint_id
+        if checkpoint.label == new_label:
+            return deepcopy(checkpoint)
+
+        checkpoint.label = new_label
+        self._checkpoints[checkpoint_index] = checkpoint
+        self.history_changed.emit()
+        return deepcopy(checkpoint)
+
     def delete_checkpoint_tree(self, checkpoint_ids: list[str] | tuple[str, ...] | set[str]) -> list[str]:
         if self._has_live_runs():
             msg = "Cannot delete checkpoints while training is active."

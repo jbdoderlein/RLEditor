@@ -1111,6 +1111,32 @@ def test_training_service_load_history_resets_live_state_and_copies_snapshot() -
     assert service._pending_episodes_by_run == {"run_loaded": []}
 
 
+def test_training_service_renames_checkpoint_label_and_emits_history_changed() -> None:
+    service = TrainingService(_history_registry())
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_001",
+        label="Old name",
+        created_at="2026-06-17 10:00:00",
+        reason="test",
+    )
+    service.load_history(
+        TrainingHistorySnapshot(
+            runs=[],
+            checkpoints=[checkpoint],
+            episodes_by_run={},
+            run_task_snapshots={},
+        )
+    )
+    notifications: list[None] = []
+    service.history_changed.connect(lambda: notifications.append(None))
+
+    renamed = service.rename_checkpoint("checkpoint_001", "New name")
+
+    assert renamed.label == "New name"
+    assert service.history_snapshot().checkpoints[0].label == "New name"
+    assert notifications == [None]
+
+
 def test_training_service_rejects_history_and_checkpoint_import_while_live() -> None:
     service = TrainingService(_history_registry())
     task = TaskDefinition(environment_id="tiny_env", name="Live Task", task_id="task_live")

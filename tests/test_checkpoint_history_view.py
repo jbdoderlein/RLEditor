@@ -5,6 +5,8 @@ import json
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog
 
 from rleditor.application.services import TrainingHistorySnapshot
@@ -613,6 +615,33 @@ def test_checkpoint_history_view_shows_q_table_for_q_learning_node() -> None:
         assert dialog.policy_cells[(0, 1)].text() == "F\n→\n1.000"
     finally:
         dialog.close()
+
+
+def test_checkpoint_history_view_double_click_checkpoint_requests_rename() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_rename",
+        label="Old checkpoint name",
+        created_at="2026-06-17 10:00:00",
+        reason="run_finished",
+    )
+    emitted: list[Checkpoint] = []
+    view.checkpoint_rename_requested.connect(emitted.append)
+
+    view.set_history(TrainingHistorySnapshot([], [checkpoint], {}, {}))
+    node = view.graph_widget.node_for_id("checkpoint_rename")
+    assert node is not None
+    assert node.label == "Old checkpoint name"
+
+    QTest.mouseDClick(
+        view.graph_widget,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(int(node.center.x()), int(node.center.y())),
+    )
+
+    assert len(emitted) == 1
+    assert emitted[0].checkpoint_id == "checkpoint_rename"
 
 
 def test_checkpoint_history_view_shows_sb3_policy_map_for_frozen_lake_checkpoint(monkeypatch) -> None:

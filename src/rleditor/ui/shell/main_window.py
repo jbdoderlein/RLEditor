@@ -10,6 +10,7 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QFrame,
     QFileDialog,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -163,6 +164,7 @@ class MainWindow(QMainWindow):
         self.history_view.checkpoint_import_requested.connect(self._on_checkpoint_import_requested)
         self.history_view.checkpoint_delete_requested.connect(self._on_checkpoint_delete_requested)
         self.history_view.checkpoint_evaluation_requested.connect(self._on_checkpoint_evaluation_requested)
+        self.history_view.checkpoint_rename_requested.connect(self._on_checkpoint_rename_requested)
         self.history_view.curriculum_import_requested.connect(self._on_curriculum_import_requested)
         self.history_view.training_run_config_selected.connect(self._on_training_run_config_selected)
         self.history_view.training_edge_live_edit_requested.connect(self._on_training_edge_live_edit_requested)
@@ -701,6 +703,33 @@ class MainWindow(QMainWindow):
             "checkpoint_deleted",
             deleted_count=deleted_count,
             checkpoint_ids=deleted_checkpoint_ids,
+        )
+
+    def _on_checkpoint_rename_requested(self, checkpoint: Checkpoint) -> None:
+        current_label = checkpoint.label or checkpoint.checkpoint_id
+        new_label, accepted = QInputDialog.getText(
+            self,
+            "Rename Checkpoint",
+            "Checkpoint name",
+            text=current_label,
+        )
+        if not accepted:
+            return
+
+        try:
+            renamed_checkpoint = self._training_service.rename_checkpoint(
+                checkpoint.checkpoint_id,
+                new_label,
+            )
+        except RuntimeError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+
+        self.statusBar().showMessage(f"Renamed checkpoint: {renamed_checkpoint.label}")
+        self._log_interaction(
+            "checkpoint_renamed",
+            checkpoint_id=renamed_checkpoint.checkpoint_id,
+            label=renamed_checkpoint.label,
         )
 
     def _on_checkpoint_evaluation_requested(self, checkpoint: Checkpoint) -> None:

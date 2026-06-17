@@ -1561,6 +1561,62 @@ def test_checkpoint_history_delete_removes_selected_checkpoint_subtree() -> None
     assert logged[-1]["deleted_count"] == 2
 
 
+def test_checkpoint_history_double_click_rename_updates_checkpoint_label(monkeypatch) -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    interaction_logger = _FakeInteractionLogger()
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+        interaction_logger=interaction_logger,  # type: ignore[arg-type]
+    )
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_rename",
+        label="Old name",
+        created_at="2026-06-17 10:00:00",
+        reason="run_finished",
+    )
+    training_service.load_history(
+        TrainingHistorySnapshot(
+            runs=[],
+            checkpoints=[checkpoint],
+            episodes_by_run={},
+            run_task_snapshots={},
+        )
+    )
+    monkeypatch.setattr(
+        "rleditor.ui.shell.main_window.QInputDialog.getText",
+        lambda *args, **kwargs: ("New checkpoint name", True),
+    )
+
+    window._on_checkpoint_rename_requested(checkpoint)
+
+    assert training_service.history_snapshot().checkpoints[0].label == "New checkpoint name"
+    node = window.history_view.graph_widget.node_for_id("checkpoint_rename")
+    assert node is not None
+    assert node.label == "New checkpoint name"
+    assert "Renamed checkpoint: New checkpoint name" in window.statusBar().currentMessage()
+    logged = [
+        payload
+        for event, payload in interaction_logger.records
+        if event == "checkpoint_renamed"
+    ]
+    assert logged[-1]["checkpoint_id"] == "checkpoint_rename"
+    assert logged[-1]["label"] == "New checkpoint name"
+
+
 def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() -> None:
     _app()
     registry = PluginRegistry()
