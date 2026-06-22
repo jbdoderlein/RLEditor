@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Protocol, cast
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLayout,
     QPushButton,
@@ -98,7 +99,7 @@ class FrozenLakeEpisodeReplayWidget(EpisodeReplayWidget):
 
         self.render_label = QLabel("Gymnasium frame preview unavailable.", self)
         self.render_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.render_label.setMinimumHeight(160)
+        self.render_label.setMinimumSize(280, 280)
         self.render_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.render_label.setStyleSheet(
             "QLabel { border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; }"
@@ -114,13 +115,20 @@ class FrozenLakeEpisodeReplayWidget(EpisodeReplayWidget):
 
         self.grid_scroll = QScrollArea(self)
         self.grid_scroll.setWidgetResizable(False)
-        self.grid_scroll.setMinimumHeight(150)
+        self.grid_scroll.setMinimumSize(360, 280)
+        self.grid_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.grid_scroll.setWidget(self.grid_host)
+
+        visual_row = QWidget(self)
+        visual_row_layout = QHBoxLayout(visual_row)
+        visual_row_layout.setContentsMargins(0, 0, 0, 0)
+        visual_row_layout.setSpacing(8)
+        visual_row_layout.addWidget(self.render_label, 1)
+        visual_row_layout.addWidget(self.grid_scroll, 1)
 
         root.addWidget(self.summary_label)
         root.addWidget(self.action_label)
-        root.addWidget(self.render_label, 1)
-        root.addWidget(self.grid_scroll, 1)
+        root.addWidget(visual_row, 1)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -207,6 +215,7 @@ class FrozenLakeEpisodeReplayWidget(EpisodeReplayWidget):
     def _set_render_pixmap(self, pixmap: QPixmap) -> None:
         self._current_render_pixmap = pixmap
         self._refresh_scaled_render_pixmap()
+        QTimer.singleShot(0, self._refresh_scaled_render_pixmap)
 
     def _refresh_scaled_render_pixmap(self) -> None:
         pixmap = self._current_render_pixmap
