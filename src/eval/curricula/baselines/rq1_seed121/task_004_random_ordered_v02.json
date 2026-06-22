@@ -1,0 +1,749 @@
+{
+  "curriculum": {
+    "size": 15,
+    "steps": [
+      {
+        "env_id": 0,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 1,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 2,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 3,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 4,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 5,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 6,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 7,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 8,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 9,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 10,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 11,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 12,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 13,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      },
+      {
+        "env_id": 14,
+        "algorithm": "q_learning",
+        "max_episodes": 4000,
+        "max_episode_length": 100
+      }
+    ]
+  },
+  "environments": [
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 0,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 01/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 1,
+        "curriculum_steps": 15,
+        "hole_count": 1,
+        "hole_density": 0.006944,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.006944,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 1,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 02/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 2,
+        "curriculum_steps": 15,
+        "hole_count": 2,
+        "hole_density": 0.013889,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.013889,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFH",
+          "FFFFFFFFFFHF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 2,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 03/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 3,
+        "curriculum_steps": 15,
+        "hole_count": 8,
+        "hole_density": 0.055556,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.055556,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFFFFHF",
+          "FFFFFFFFFFFF",
+          "FFFFFFHFFFFH",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "HFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFHFFFFFFHFF",
+          "HFHFFFFFFFFF",
+          "FFFFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 3,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 04/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 4,
+        "curriculum_steps": 15,
+        "hole_count": 21,
+        "hole_density": 0.145833,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.145833,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFHFFFF",
+          "FFFHFFFFFFHF",
+          "FHFFFFFFFFHF",
+          "FFFFFFFFHFFF",
+          "FFHFHFFFFFFF",
+          "HFFFFHFFFFFF",
+          "FFFFFFFFFFFF",
+          "HHFFFFHHFHFF",
+          "FFFFFFFFFHFF",
+          "HFFFFFFFFFFH",
+          "FFFFFFFFHHFF",
+          "FHFFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 4,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 05/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 5,
+        "curriculum_steps": 15,
+        "hole_count": 25,
+        "hole_density": 0.173611,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.173611,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFHFFFFFFFF",
+          "FFFFFHFFFFFF",
+          "FFFFFFFFHHFF",
+          "FHFHFFFFFHFF",
+          "FFFFHHFFHFFF",
+          "FFFFFHFHFFFF",
+          "FFFFHFFFFHFF",
+          "FFFHFFFFFFFF",
+          "FFHFFFFFFFFF",
+          "FHFFFFFFFHFH",
+          "HFFFFHFFFHFF",
+          "FHFHFFHFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 5,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 06/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 6,
+        "curriculum_steps": 15,
+        "hole_count": 26,
+        "hole_density": 0.180556,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.180556,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFHHFFFFFFF",
+          "FFHFHFFFFFFF",
+          "HFFFFFHHFFFF",
+          "FFFFFFFFFHHF",
+          "FFHHFFHFFFFF",
+          "FHFFFFFHFFFF",
+          "FFFHFHFHFHFF",
+          "FFHHFFFFFFFF",
+          "FFFFFFFHFHFF",
+          "FFFHFFFFHFFF",
+          "FFFHHFFFFFFF",
+          "FFFFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 6,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 07/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 7,
+        "curriculum_steps": 15,
+        "hole_count": 27,
+        "hole_density": 0.1875,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.1875,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFFFFFF",
+          "HFHFFFHFHFFH",
+          "FHFHFHFFFFFF",
+          "FHFFFFFFFFHF",
+          "FHHFHHFFFFFF",
+          "FFFFFHHFFFFH",
+          "FFFHFFFFFFFF",
+          "HFFFFFFFFHHF",
+          "HFFFFFFFFFFF",
+          "FHFFFFFFFFFH",
+          "FFFFFFFHFHFF",
+          "HFFFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 7,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 08/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 8,
+        "curriculum_steps": 15,
+        "hole_count": 29,
+        "hole_density": 0.201389,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.201389,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFFFHFF",
+          "FFFFHFFFFHFF",
+          "HHHFFFFFFFFF",
+          "FFFFFHHFHFFF",
+          "HFFFFFHHFFHF",
+          "FHFFFFFFFFFH",
+          "FFFFFFFFFFFH",
+          "FFFFFHFFFFFF",
+          "HHFHFFFFFHHF",
+          "HFHHFFFHFFFF",
+          "FFFHFFFFFFFF",
+          "FFFFFFFFFHHG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 8,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 09/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 9,
+        "curriculum_steps": 15,
+        "hole_count": 32,
+        "hole_density": 0.222222,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.222222,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFFFFFH",
+          "FFFHFFFFFFFH",
+          "FHFHFFFFFFHF",
+          "HHFFFFHFFFHH",
+          "HHFFFFHFHFFH",
+          "FFFFFFFFFFHF",
+          "FFHFFFFFFFFF",
+          "FFFFFFHFFHHF",
+          "FHFFHFFFFFFF",
+          "FHFFHFHFFHFF",
+          "FFHFHFFHFFFF",
+          "FFFFHFHFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 9,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 10/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 10,
+        "curriculum_steps": 15,
+        "hole_count": 39,
+        "hole_density": 0.270833,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.270833,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFFFFHF",
+          "FHFHFHFHFHFF",
+          "HHFFFFHFHHHF",
+          "HHFHFFFHFFFF",
+          "HFFFHFFFHFHH",
+          "FFFFHFFHFFHF",
+          "FHFFFFHHFFFH",
+          "FFHFHFFFFHHF",
+          "FHFFFFFFHFFF",
+          "FFFFFFFFFFFH",
+          "FHFFFFFFFFFF",
+          "FFFHFFHFFHFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 10,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 11/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 11,
+        "curriculum_steps": 15,
+        "hole_count": 40,
+        "hole_density": 0.277778,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.277778,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFHFFHF",
+          "FFHFFHFFFFHF",
+          "HHHFFFHFHHFH",
+          "HHHFFFFFFFFF",
+          "FFFFFHHHFHHF",
+          "FFFFFFFFHFFF",
+          "FFFFFFFHFFHF",
+          "HHFHHHFFHFHF",
+          "FFFFFFFHFFFF",
+          "FFFFFFFHFFFF",
+          "FFHFFHFHFFFH",
+          "HHFFFFHFHFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 11,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 12/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 12,
+        "curriculum_steps": 15,
+        "hole_count": 44,
+        "hole_density": 0.305556,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.305556,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFHFHHFFFFH",
+          "FHFFFFHHHFFF",
+          "FHFFFFFFHHFF",
+          "FHFFHHFFFFFF",
+          "FHFFFHFFFFHH",
+          "HFFFFFHFFFHF",
+          "HFFFHFFFHHFF",
+          "FHHFFFFFFFHF",
+          "HFFFHHFFHFFH",
+          "HFFHHFFFFFFF",
+          "HFFFHFFHHFHF",
+          "FFHFFFHFFFHG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 12,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 13/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 13,
+        "curriculum_steps": 15,
+        "hole_count": 46,
+        "hole_density": 0.319444,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.319444,
+        "is_slippery": false,
+        "map_desc": [
+          "SFHFFFHFHHHH",
+          "HFHFFHHHFFFF",
+          "FFHFFFFHFFFF",
+          "FFFFFFFFFFFH",
+          "FFHHFHFHFHFF",
+          "FFFHFFFFHFFH",
+          "HFFFHHFFFHFH",
+          "FFHFFHFFFHFF",
+          "HFFHFHFFHHFH",
+          "HFFFFHHFFFHF",
+          "FFFFFFFHFHFH",
+          "FHFFFHHFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 13,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 14/15",
+      "metadata": {
+        "curriculum_role": "rq1_random_ordered_intermediate",
+        "curriculum_step": 14,
+        "curriculum_steps": 15,
+        "hole_count": 49,
+        "hole_density": 0.340278,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.340278,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHHFFHHFF",
+          "HFHFHFFHFFHF",
+          "FFHFFFFFFFFH",
+          "FFHFFHFFFHFF",
+          "FHHFHFHFFHFF",
+          "FFHFFFHFFFHH",
+          "HFHFHFFFFFHF",
+          "FHFFFHFHFHHF",
+          "HFFHHFFHFFFF",
+          "FFHHFFFHHFHH",
+          "FHFFFFFHFFFF",
+          "FHFFHFHFFHHG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 14,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - Random Ordered Baseline v02 - Step 15/15 (Target)",
+      "metadata": {
+        "curriculum_role": "rq1_target",
+        "curriculum_step": 15,
+        "curriculum_steps": 15,
+        "hole_count": 58,
+        "hole_density": 0.402778,
+        "target_hole_density": 0.4,
+        "baseline_type": "random_ordered",
+        "baseline_seed": 42,
+        "variant": 2
+      },
+      "task_config": {
+        "hole_probability": 0.402778,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    }
+  ],
+  "evaluation": {
+    "evaluation_env": 14,
+    "eval_episodes": 100,
+    "max_episode_length": 100
+  }
+}
