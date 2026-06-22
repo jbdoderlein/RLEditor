@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QFileDialog
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
 
 from rleditor.application.services import TrainingHistorySnapshot
 from rleditor.core.models import (
@@ -724,6 +724,68 @@ def test_checkpoint_history_view_emits_manual_evaluation_for_selected_checkpoint
     assert captured[0].checkpoint_id == "checkpoint_004"
 
 
+def test_checkpoint_history_view_normalize_emits_additional_episodes() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    parent_checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_parent",
+        label="Parent checkpoint",
+        created_at="2026-04-28 11:30:00",
+        reason="run_finished",
+        run_id="run_parent",
+        task_name="Training Task",
+        step=40,
+        episode=4,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Training Task"),
+        metadata={"algorithm": "q_learning"},
+    )
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_child",
+        label="Child checkpoint",
+        created_at="2026-04-28 11:35:00",
+        reason="run_finished",
+        parent_checkpoint_id="checkpoint_parent",
+        run_id="run_child",
+        task_name="Training Task",
+        step=30,
+        episode=3,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Training Task"),
+        metadata={"algorithm": "q_learning"},
+    )
+    view.set_history(TrainingHistorySnapshot([], [parent_checkpoint, checkpoint], {}, {}))
+    node = view.graph_widget.node_for_id("checkpoint_child")
+    assert node is not None
+    view._show_node_details(node)
+
+    assert view.normalize_checkpoint_button.isEnabled()
+    assert view._cumulative_episodes_to_checkpoint(checkpoint) == 7
+
+    dialog = view._build_normalize_checkpoint_dialog(checkpoint)
+    try:
+        assert dialog.target_episodes_spin.value() == 7
+        assert not dialog.accept_button.isEnabled()
+        dialog.target_episodes_spin.setValue(10)
+        assert dialog.additional_episodes() == 3
+        assert dialog.accept_button.isEnabled()
+    finally:
+        dialog.close()
+
+    class _FakeDialog:
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def additional_episodes(self) -> int:
+            return 3
+
+    view._build_normalize_checkpoint_dialog = lambda _checkpoint: _FakeDialog()  # type: ignore[method-assign]
+    emitted: list[tuple[Checkpoint, int]] = []
+    view.checkpoint_normalize_requested.connect(lambda checkpoint, episodes: emitted.append((checkpoint, episodes)))
+
+    view.normalize_checkpoint_button.click()
+
+    assert [(item.checkpoint_id, episodes) for item, episodes in emitted] == [("checkpoint_child", 3)]
+
+
 def test_checkpoint_history_view_emits_delete_for_selected_checkpoints() -> None:
     _app()
     view = CheckpointHistoryView()
@@ -991,6 +1053,12 @@ def test_checkpoint_history_view_merged_import_routes_by_file_content(monkeypatc
     }
     curriculum_path = tmp_path / "curriculum.json"
     curriculum_path.write_text(json.dumps(curriculum_payload), encoding="utf-8")
+    second_curriculum_payload = {
+        "curriculum": {"steps": [{"step_id": 1, "env_id": 0, "steps": 20}]},
+        "environments": [{"environment_id": "tiny_env", "task_name": "Second Task"}],
+    }
+    second_curriculum_path = tmp_path / "curriculum_second.json"
+    second_curriculum_path.write_text(json.dumps(second_curriculum_payload), encoding="utf-8")
 
     imported_checkpoints: list[Checkpoint] = []
     imported_curricula: list[object] = []
@@ -999,20 +1067,16 @@ def test_checkpoint_history_view_merged_import_routes_by_file_content(monkeypatc
 
     monkeypatch.setattr(
         QFileDialog,
-        "getOpenFileName",
-        lambda *args, **kwargs: (str(checkpoint_path), "JSON Files (*.json)"),
-    )
-    view._import_from_file()
-
-    monkeypatch.setattr(
-        QFileDialog,
-        "getOpenFileName",
-        lambda *args, **kwargs: (str(curriculum_path), "JSON Files (*.json)"),
+        "getOpenFileNames",
+        lambda *args, **kwargs: (
+            [str(checkpoint_path), str(curriculum_path), str(second_curriculum_path)],
+            "JSON Files (*.json)",
+        ),
     )
     view._import_from_file()
 
     assert [item.checkpoint_id for item in imported_checkpoints] == ["checkpoint_imported"]
-    assert imported_curricula == [curriculum_payload]
+    assert imported_curricula == [curriculum_payload, second_curriculum_payload]
 
 
 def test_checkpoint_history_view_builds_curriculum_export_for_selected_lineage() -> None:
@@ -1175,7 +1239,7 @@ def test_checkpoint_history_view_builds_curriculum_export_for_selected_lineage()
     assert "training_runs" not in plan_payload
 
 
-def test_checkpoint_history_view_builds_training_report_for_selected_lineage() -> None:
+def test_checkpoint_history_view_builds_training_report_for_selected_lineage(monkeypatch, tmp_path) -> None:
     _app()
     view = CheckpointHistoryView()
     main_task = TaskSnapshot(
@@ -1264,6 +1328,23 @@ def test_checkpoint_history_view_builds_training_report_for_selected_lineage() -
     try:
         assert dialog.report["target_checkpoint_id"] == "checkpoint_002"
         assert dialog.windowTitle() == "Training report"
+        export_path = tmp_path / "training_report.json"
+        monkeypatch.setattr(
+            QFileDialog,
+            "getSaveFileName",
+            lambda *args, **kwargs: (str(export_path), "JSON Files (*.json)"),
+        )
+        monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+
+        dialog.export_json_button.click()
+
+        exported = json.loads(export_path.read_text(encoding="utf-8"))
+        assert exported["target_checkpoint_id"] == "checkpoint_002"
+        assert exported["cumulative_reward_points"] == [
+            [1, 1.0],
+            [2, 0.5],
+            [3, 2.5],
+        ]
     finally:
         dialog.close()
 

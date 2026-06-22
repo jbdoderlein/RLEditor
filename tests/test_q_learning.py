@@ -211,6 +211,57 @@ def test_q_learning_runner_restores_checkpoint_and_exploits_best_known_action() 
     assert env.actions == [1]
 
 
+def test_q_learning_runner_can_roll_out_without_updating_model() -> None:
+    runner = TrainingRunner()
+    env = _OneStepChoiceEnv()
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_q_no_update",
+        label="Q checkpoint",
+        created_at="now",
+        reason="test",
+        task_snapshot=TaskSnapshot(environment_id="test_env", task_name="Q Test Task"),
+        metadata={
+            "algorithm": "q_learning",
+            "learner_state": {
+                "algorithm": "q_learning",
+                "q_values": [
+                    {"state_key": "0", "action": 0, "value": -1.0},
+                    {"state_key": "0", "action": 1, "value": 4.0},
+                ],
+            },
+        },
+    )
+    config = RunConfig(
+        algorithm="q_learning",
+        max_steps=1,
+        max_episodes=1,
+        epsilon=0.0,
+        hyperparameters={
+            "epsilon": 0.0,
+            "epsilon_min": 0.0,
+            "disable_model_updates": True,
+        },
+        metadata={"disable_model_updates": True},
+    )
+
+    runner.start(
+        _task(),
+        config,
+        run_id="run_q_no_update",
+        env_factory=lambda _task: env,
+        initial_checkpoint=checkpoint,
+    )
+    runner._on_tick()
+
+    assert runner.status == TrainingStatus.FINISHED
+    assert env.actions == [1]
+    assert _q_values_by_key(runner) == {
+        ("0", 0): pytest.approx(-1.0),
+        ("0", 1): pytest.approx(4.0),
+    }
+    assert runner._metrics.cumulative_reward == pytest.approx(2.0)
+
+
 def test_q_learning_evaluation_uses_greedy_action_from_exported_q_table() -> None:
     task = _task()
     config = RunConfig(algorithm="q_learning", max_steps=10)

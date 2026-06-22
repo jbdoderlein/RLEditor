@@ -428,7 +428,7 @@ class TrainingRunner(QObject):
         self._metrics.reward_step = reward_value
         self._metrics.cumulative_reward += reward_value
 
-        if self._config.algorithm == "q_learning":
+        if self._config.algorithm == "q_learning" and not self._model_updates_disabled():
             self._update_q_learning(
                 normalized_previous_observation,
                 int(action),
@@ -438,8 +438,12 @@ class TrainingRunner(QObject):
                 env,
             )
         else:
-            self._metrics.value_loss = None
-            self._metrics.policy_loss = None
+            if self._config.algorithm == "q_learning":
+                self._metrics.value_loss = 0.0
+                self._metrics.policy_loss = None
+            else:
+                self._metrics.value_loss = None
+                self._metrics.policy_loss = None
 
         if done:
             self._metrics.episode += 1
@@ -778,6 +782,11 @@ class TrainingRunner(QObject):
             return float(raw_value)
         except (TypeError, ValueError):
             return default
+
+    def _model_updates_disabled(self) -> bool:
+        metadata_flag = self._config.metadata.get("disable_model_updates")
+        hyperparameter_flag = self._config.hyperparameters.get("disable_model_updates")
+        return bool(metadata_flag or hyperparameter_flag)
 
     def _update_q_learning(
         self,

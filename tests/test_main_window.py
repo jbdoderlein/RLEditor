@@ -659,6 +659,60 @@ def test_curriculum_import_adds_tasks_and_starts_first_step() -> None:
     assert queued_config.evaluation_policy["seed"] == 7
 
 
+def test_curriculum_import_queues_next_payload_while_current_import_is_active() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+    )
+
+    def _payload(task_name: str) -> dict[str, object]:
+        return {
+            "curriculum": {"steps": [{"env_id": 0, "steps": 10, "algorithm": "q_learning"}]},
+            "environments": [
+                {
+                    "task_id": 0,
+                    "environment_id": "dummy_env",
+                    "task_name": task_name,
+                    "task_config": {"difficulty": task_name},
+                }
+            ],
+        }
+
+    starts: list[tuple[TaskDefinition, RunConfig, dict[str, object]]] = []
+
+    def _capture_start(task, config, **kwargs):
+        starts.append((task, config, kwargs))
+
+    training_service.start = _capture_start  # type: ignore[method-assign]
+
+    window._on_curriculum_import_requested(_payload("First Import"))
+    window._on_curriculum_import_requested(_payload("Second Import"))
+
+    assert [item[0].name for item in starts] == ["First Import"]
+    assert len(window._pending_curriculum_import_payloads) == 1
+
+    window._start_next_imported_curriculum_step()
+    _wait_for(lambda: len(starts) == 2)
+
+    assert [item[0].name for item in starts] == ["First Import", "Second Import"]
+    assert not window._pending_curriculum_import_payloads
+    assert starts[1][2]["start_from_scratch"] is True
+
+
 def test_curriculum_import_without_evaluation_uses_final_step_as_default_eval_task() -> None:
     _app()
     registry = PluginRegistry()
@@ -1615,6 +1669,81 @@ def test_checkpoint_history_double_click_rename_updates_checkpoint_label(monkeyp
     ]
     assert logged[-1]["checkpoint_id"] == "checkpoint_rename"
     assert logged[-1]["label"] == "New checkpoint name"
+
+
+def test_checkpoint_history_normalize_starts_no_update_training_run() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="tiny_env",
+            display_name="Tiny",
+            description="Tiny normalize plugin",
+            backend=_TinyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_normalize",
+        label="Normalize source",
+        created_at="2026-06-20 10:00:00",
+        reason="run_finished",
+        task_name="Tiny Task",
+        step=10,
+        episode=5,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Tiny Task"),
+        metadata={
+            "algorithm": "q_learning",
+            "learner_state": {
+                "algorithm": "q_learning",
+                "q_values": [{"state_key": "0", "action": 1, "value": 2.0}],
+            },
+            "run_config": RunConfig(
+                algorithm="q_learning",
+                max_steps=10,
+                max_steps_per_episode=5,
+                epsilon=0.5,
+                learning_rate=0.3,
+            ).to_dict(),
+        },
+    )
+    training_service.load_history(TrainingHistorySnapshot([], [checkpoint], {}, {}))
+    interaction_logger = _FakeInteractionLogger()
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="tiny_env",
+        interaction_logger=interaction_logger,  # type: ignore[arg-type]
+    )
+
+    window._on_checkpoint_normalize_requested(checkpoint, 3)
+
+    _wait_for(lambda: training_service.status == TrainingStatus.FINISHED)
+    snapshot = training_service.history_snapshot()
+    assert len(snapshot.runs) == 1
+    run = snapshot.runs[0]
+    assert run.parent_checkpoint_id == "checkpoint_normalize"
+    run_config = RunConfig.from_dict(run.metadata["run_config"])
+    assert run_config.max_steps is None
+    assert run_config.max_episodes == 3
+    assert run_config.epsilon == 0.0
+    assert run_config.learning_rate == 0.0
+    assert run_config.metadata["disable_model_updates"] is True
+
+    assert len(snapshot.checkpoints) == 2
+    normalized_checkpoint = snapshot.checkpoints[-1]
+    assert normalized_checkpoint.parent_checkpoint_id == "checkpoint_normalize"
+    assert normalized_checkpoint.episode == 3
+    assert normalized_checkpoint.metadata["learner_state"] == checkpoint.metadata["learner_state"]
+    logged = [
+        payload
+        for event, payload in interaction_logger.records
+        if event == "checkpoint_normalize_started"
+    ]
+    assert logged[-1]["checkpoint_id"] == "checkpoint_normalize"
+    assert logged[-1]["additional_episodes"] == 3
 
 
 def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() -> None:

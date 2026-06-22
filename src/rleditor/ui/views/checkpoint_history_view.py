@@ -403,6 +403,55 @@ class _CheckpointNodeActionDialog(QDialog):
         self.accept()
 
 
+class _NormalizeCheckpointDialog(QDialog):
+    def __init__(
+        self,
+        *,
+        checkpoint: Checkpoint,
+        current_episodes: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Normalize checkpoint")
+        self.resize(420, 180)
+        self._current_episodes = max(0, int(current_episodes))
+
+        root = QVBoxLayout(self)
+        description = QLabel(
+            f"Checkpoint: {checkpoint.label or checkpoint.checkpoint_id}",
+            self,
+        )
+        description.setWordWrap(True)
+        root.addWidget(description)
+
+        form = QFormLayout()
+        self.target_episodes_spin = QSpinBox(self)
+        self.target_episodes_spin.setRange(self._current_episodes, 2_147_483_647)
+        self.target_episodes_spin.setValue(self._current_episodes)
+        self.target_episodes_spin.valueChanged.connect(self._update_accept_enabled)
+        form.addRow("Target total episodes", self.target_episodes_spin)
+        root.addLayout(form)
+
+        self.delta_label = QLabel("", self)
+        root.addWidget(self.delta_label)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, self)
+        self.accept_button = buttons.addButton("Normalize", QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+        self._update_accept_enabled()
+
+    def additional_episodes(self) -> int:
+        return max(0, self.target_episodes_spin.value() - self._current_episodes)
+
+    def _update_accept_enabled(self) -> None:
+        additional_episodes = self.additional_episodes()
+        self.delta_label.setText(f"Additional no-learning episodes: {additional_episodes}")
+        self.accept_button.setEnabled(additional_episodes > 0)
+
+
 class _TrainingEdgeEditDialog(QDialog):
     def __init__(self, config: RunConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -747,6 +796,11 @@ class _TrainingReportDialog(QDialog):
         )
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        self.export_json_button = buttons.addButton(
+            "Export JSON",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.export_json_button.clicked.connect(self._export_json)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
@@ -797,6 +851,50 @@ class _TrainingReportDialog(QDialog):
                 }
             )
         return series
+
+    def _export_json(self) -> None:
+        selected_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Training Report",
+            self._default_export_filename(),
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected_path:
+            return
+
+        path = Path(selected_path).expanduser()
+        if path.suffix == "":
+            path = path.with_suffix(".json")
+
+        try:
+            path.write_text(
+                json.dumps(self.report, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Export Training Report",
+                f"Could not write training report:\n{exc}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Export Training Report",
+            f"Training report exported to:\n{path}",
+        )
+
+    def _default_export_filename(self) -> str:
+        if len(self.reports) > 1:
+            return "training_report_selected_checkpoints.json"
+        report = self.reports[0] if self.reports else {}
+        checkpoint_id = str(report.get("target_checkpoint_id") or "selected_checkpoint")
+        safe_checkpoint_id = "".join(
+            char if char.isalnum() or char in {"-", "_"} else "_"
+            for char in checkpoint_id
+        )
+        return f"training_report_{safe_checkpoint_id}.json"
 
 
 def _q_values_from_checkpoint(checkpoint: Checkpoint) -> dict[tuple[str, int], float]:
@@ -1365,6 +1463,7 @@ class CheckpointHistoryView(QWidget):
     checkpoint_delete_requested = Signal(object)
     checkpoint_evaluation_requested = Signal(object)
     checkpoint_rename_requested = Signal(object)
+    checkpoint_normalize_requested = Signal(object, int)
     curriculum_import_requested = Signal(object)
     training_run_config_selected = Signal(object)
     training_edge_live_edit_requested = Signal(object, object)
@@ -1422,6 +1521,11 @@ class CheckpointHistoryView(QWidget):
             "Show aggregate training information from the lineage start to the selected checkpoint(s)."
         )
         self.show_training_report_button.setEnabled(False)
+        self.normalize_checkpoint_button = QPushButton("Normalize", right_panel)
+        self.normalize_checkpoint_button.setToolTip(
+            "Extend the selected checkpoint path to a fixed total episode count without updating the model."
+        )
+        self.normalize_checkpoint_button.setEnabled(False)
         self.export_checkpoint_button = QPushButton("Export Checkpoint", right_panel)
         self.export_checkpoint_button.setToolTip(
             "Export only the selected checkpoint JSON."
@@ -1508,6 +1612,7 @@ class CheckpointHistoryView(QWidget):
 
         secondary_buttons_layout = QHBoxLayout()
         secondary_buttons_layout.addWidget(self.show_training_report_button)
+        secondary_buttons_layout.addWidget(self.normalize_checkpoint_button)
         secondary_buttons_layout.addWidget(self.delete_checkpoint_button)
         secondary_buttons_layout.addWidget(self.import_curriculum_button)
         secondary_buttons_layout.addWidget(self.live_edit_button)
@@ -1547,6 +1652,7 @@ class CheckpointHistoryView(QWidget):
         )
         self.export_curriculum_plan_button.clicked.connect(self._export_selected_curriculum_plan)
         self.show_training_report_button.clicked.connect(self._show_training_report_for_selected_checkpoint)
+        self.normalize_checkpoint_button.clicked.connect(self._open_normalize_selected_checkpoint)
         self.export_checkpoint_button.clicked.connect(self._export_selected_checkpoint)
         self.delete_checkpoint_button.clicked.connect(self._emit_delete_selected_checkpoints)
         self.evaluate_checkpoint_button.clicked.connect(self._emit_evaluate_selected_checkpoint)
@@ -1987,6 +2093,7 @@ class CheckpointHistoryView(QWidget):
         self.export_checkpoint_button.setEnabled(enabled)
         self.delete_checkpoint_button.setEnabled(enabled)
         self.evaluate_checkpoint_button.setEnabled(enabled)
+        self.normalize_checkpoint_button.setEnabled(enabled and self.selected_checkpoint() is not None)
 
     def _set_live_edit_button_enabled(self, enabled: bool) -> None:
         self.live_edit_button.setEnabled(enabled)
@@ -2029,6 +2136,40 @@ class CheckpointHistoryView(QWidget):
             )
             return
         self._build_training_report_dialog(checkpoints).exec()
+
+    def _open_normalize_selected_checkpoint(self) -> None:
+        checkpoint = self.selected_checkpoint()
+        if checkpoint is None:
+            QMessageBox.warning(
+                self,
+                "Normalize Checkpoint",
+                "Select a checkpoint before normalizing.",
+            )
+            return
+
+        dialog = self._build_normalize_checkpoint_dialog(checkpoint)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        additional_episodes = dialog.additional_episodes()
+        if additional_episodes <= 0:
+            return
+        self.checkpoint_normalize_requested.emit(checkpoint, additional_episodes)
+
+    def _build_normalize_checkpoint_dialog(self, checkpoint: Checkpoint) -> _NormalizeCheckpointDialog:
+        return _NormalizeCheckpointDialog(
+            checkpoint=checkpoint,
+            current_episodes=self._cumulative_episodes_to_checkpoint(checkpoint),
+            parent=self,
+        )
+
+    def _cumulative_episodes_to_checkpoint(self, target_checkpoint: Checkpoint) -> int:
+        total_episodes = 0
+        previous_checkpoint: Checkpoint | None = None
+        for checkpoint in self._checkpoint_lineage(target_checkpoint) or [target_checkpoint]:
+            total_episodes += self._training_episode_delta(checkpoint, previous_checkpoint)
+            previous_checkpoint = checkpoint
+        return total_episodes
 
     def _build_training_report_dialog(
         self,
@@ -2183,16 +2324,19 @@ class CheckpointHistoryView(QWidget):
         self.checkpoint_delete_requested.emit(checkpoint_ids)
 
     def _import_from_file(self) -> None:
-        selected_path, _selected_filter = QFileDialog.getOpenFileName(
+        selected_paths, _selected_filter = QFileDialog.getOpenFileNames(
             self,
             "Import",
             "",
             "JSON Files (*.json);;All Files (*)",
         )
-        if not selected_path:
+        if not selected_paths:
             return
 
-        path = Path(selected_path).expanduser()
+        for selected_path in selected_paths:
+            self._import_path(Path(selected_path).expanduser())
+
+    def _import_path(self, path: Path) -> None:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if self._is_curriculum_plan_payload(payload):
@@ -2205,7 +2349,7 @@ class CheckpointHistoryView(QWidget):
             QMessageBox.warning(
                 self,
                 "Import",
-                f"Could not import file:\n{exc}",
+                f"Could not import file {path}:\n{exc}",
             )
             return
 

@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         self._current_task: TaskDefinition | None = None
         self._task_workspace: list[TaskDefinition] = []
         self._imported_curriculum_queue: deque[tuple[TaskDefinition, RunConfig]] = deque()
+        self._pending_curriculum_import_payloads: deque[object] = deque()
         self._imported_curriculum_active = False
         self._imported_curriculum_waiting_for_step = False
         self._imported_curriculum_checkpoint_stop_pending = False
@@ -165,6 +166,7 @@ class MainWindow(QMainWindow):
         self.history_view.checkpoint_delete_requested.connect(self._on_checkpoint_delete_requested)
         self.history_view.checkpoint_evaluation_requested.connect(self._on_checkpoint_evaluation_requested)
         self.history_view.checkpoint_rename_requested.connect(self._on_checkpoint_rename_requested)
+        self.history_view.checkpoint_normalize_requested.connect(self._on_checkpoint_normalize_requested)
         self.history_view.curriculum_import_requested.connect(self._on_curriculum_import_requested)
         self.history_view.training_run_config_selected.connect(self._on_training_run_config_selected)
         self.history_view.training_edge_live_edit_requested.connect(self._on_training_edge_live_edit_requested)
@@ -584,6 +586,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._start_next_imported_curriculum_step)
         elif status == TrainingStatus.STOPPED:
             self._imported_curriculum_queue.clear()
+            self._pending_curriculum_import_payloads.clear()
             self._imported_curriculum_active = False
             self._imported_curriculum_waiting_for_step = False
             self._imported_curriculum_checkpoint_stop_pending = False
@@ -755,6 +758,68 @@ class MainWindow(QMainWindow):
             policy=policy,
         )
 
+    def _on_checkpoint_normalize_requested(self, checkpoint: Checkpoint, additional_episodes: int) -> None:
+        if checkpoint.task_snapshot is None:
+            self.statusBar().showMessage("Cannot normalize checkpoint: no task snapshot is available")
+            return
+        if additional_episodes <= 0:
+            self.statusBar().showMessage("Cannot normalize checkpoint: target episode count must be higher")
+            return
+
+        algorithm = str(checkpoint.metadata.get("algorithm", "q_learning"))
+        if algorithm != "q_learning":
+            self.statusBar().showMessage("Normalize currently supports Q-learning checkpoints only")
+            return
+
+        snapshot = self._training_service.history_snapshot(deep=False)
+        runs_by_id = {run.run_id: run for run in snapshot.runs}
+        run = runs_by_id.get(checkpoint.run_id or "")
+        config = self._run_config_for_history_checkpoint(run, checkpoint)
+        config.max_steps = None
+        config.max_episodes = additional_episodes
+        config.breakpoints = []
+        config.checkpoint_policy = {}
+        config.evaluation_policy = {}
+        config.epsilon = 0.0
+        config.learning_rate = 0.0
+        config.hyperparameters = dict(config.hyperparameters)
+        config.hyperparameters["epsilon"] = 0.0
+        config.hyperparameters["learning_rate"] = 0.0
+        config.hyperparameters["disable_model_updates"] = True
+        config.metadata = dict(config.metadata)
+        config.metadata.update(
+            {
+                "normalize_run": True,
+                "disable_model_updates": True,
+                "source_checkpoint_id": checkpoint.checkpoint_id,
+                "additional_episodes": additional_episodes,
+            }
+        )
+
+        task = self._task_from_snapshot(checkpoint.task_snapshot)
+        self.episode_view.clear_episodes()
+        try:
+            self._training_service.start(
+                task,
+                config,
+                initial_checkpoint=checkpoint,
+                start_from_scratch=False,
+                run_in_background=True,
+            )
+        except RuntimeError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+
+        self.statusBar().showMessage(
+            f"Normalize run started from {checkpoint.checkpoint_id} for {additional_episodes} episode(s)"
+        )
+        self._log_interaction(
+            "checkpoint_normalize_started",
+            checkpoint_id=checkpoint.checkpoint_id,
+            additional_episodes=additional_episodes,
+            algorithm=config.algorithm,
+        )
+
     def _on_multiple_evaluation_requested(self) -> None:
         selected_tasks = self.evaluation_view.selected_evaluation_tasks()
         if not selected_tasks:
@@ -816,14 +881,27 @@ class MainWindow(QMainWindow):
         )
 
     def _on_curriculum_import_requested(self, payload: object) -> None:
-        try:
-            imported_tasks, curriculum_steps = self._curriculum_from_import_payload(payload)
-        except ValueError as exc:
-            self.statusBar().showMessage(f"Cannot import curriculum: {exc}")
+        if self._imported_curriculum_active:
+            self._pending_curriculum_import_payloads.append(payload)
+            self.statusBar().showMessage(
+                f"Queued curriculum import: {len(self._pending_curriculum_import_payloads)} pending"
+            )
+            self._log_interaction(
+                "curriculum_import_queued",
+                pending_count=len(self._pending_curriculum_import_payloads),
+            )
             return
         if self._training_service.status in {TrainingStatus.RUNNING, TrainingStatus.PAUSED}:
             self.statusBar().showMessage("Cannot import curriculum while training is running")
             return
+        self._begin_curriculum_import(payload)
+
+    def _begin_curriculum_import(self, payload: object) -> bool:
+        try:
+            imported_tasks, curriculum_steps = self._curriculum_from_import_payload(payload)
+        except ValueError as exc:
+            self.statusBar().showMessage(f"Cannot import curriculum: {exc}")
+            return False
 
         self._task_workspace.extend(imported_tasks)
         selected_index = len(self._task_workspace) - len(imported_tasks) if imported_tasks else None
@@ -851,6 +929,7 @@ class MainWindow(QMainWindow):
             step_count=len(curriculum_steps),
         )
         self._start_next_imported_curriculum_step()
+        return True
 
     def _refresh_history_view(self) -> None:
         self.history_view.set_history(self._training_service.history_snapshot(deep=False))
@@ -1400,6 +1479,8 @@ class MainWindow(QMainWindow):
             self._imported_curriculum_checkpoint_stop_pending = False
             self._set_status_busy("curriculum", False)
             self.statusBar().showMessage(f"Curriculum execution completed: {completed} step(s)")
+            if self._pending_curriculum_import_payloads:
+                QTimer.singleShot(0, self._start_next_pending_curriculum_import)
             return
 
         task, config = self._imported_curriculum_queue.popleft()
@@ -1417,6 +1498,7 @@ class MainWindow(QMainWindow):
             )
         except RuntimeError as exc:
             self._imported_curriculum_queue.clear()
+            self._pending_curriculum_import_payloads.clear()
             self._imported_curriculum_active = False
             self._imported_curriculum_waiting_for_step = False
             self._imported_curriculum_checkpoint_stop_pending = False
@@ -1435,6 +1517,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Curriculum step {step_number} started on task: {task.name}"
         )
+
+    def _start_next_pending_curriculum_import(self) -> None:
+        if self._imported_curriculum_active:
+            return
+        if self._training_service.status in {TrainingStatus.RUNNING, TrainingStatus.PAUSED}:
+            self.statusBar().showMessage("Cannot start queued curriculum while training is running")
+            return
+        while self._pending_curriculum_import_payloads:
+            payload = self._pending_curriculum_import_payloads.popleft()
+            if self._begin_curriculum_import(payload):
+                return
 
     def _start_next_live_edit_step(self) -> None:
         if not self._live_edit_active:
