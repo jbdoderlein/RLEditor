@@ -9,9 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
-*.json
 
 .codex
 
 logs/
 projects/
+src/eval/checkpoints/*.json
