@@ -26,32 +26,32 @@
     {
       "environment_id": "frozen_lake",
       "task_id": 0,
-      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - GA Baseline - Step 01/03",
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - GA Baseline v2 - Step 01/03",
       "metadata": {
         "curriculum_role": "rq1_ga_intermediate",
         "curriculum_step": 1,
         "curriculum_steps": 3,
-        "hole_count": 4,
-        "hole_density": 0.027778,
+        "hole_count": 7,
+        "hole_density": 0.048611,
         "target_hole_density": 0.1,
         "baseline_type": "ga",
-        "ga_complexity": null
+        "ga_version": 2
       },
       "task_config": {
-        "hole_probability": 0.027778,
+        "hole_probability": 0.048611,
         "is_slippery": false,
         "map_desc": [
-          "SFFFFFFFFFFF",
-          "FFFFFFFFFFFF",
-          "FFFFFFFFFFFF",
-          "FFFHFFFFFFFF",
-          "FFFFFFFFFFFF",
-          "FFFFFFFHFFFF",
-          "FFFFFFFFFFFF",
+          "SFFFFFFFFFHF",
           "FFFFFFFFFFFF",
           "FFHFFFFFFFFF",
           "FFFFFFFFFFFF",
-          "FFFFFFFHFFFF",
+          "FFFHFFFFFFFF",
+          "FFFFFHFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFFFFFFFFFHF",
+          "FHFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
           "FFFFFFFFFFFG"
         ],
         "size": 12,
@@ -68,33 +68,33 @@
     {
       "environment_id": "frozen_lake",
       "task_id": 1,
-      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - GA Baseline - Step 02/03",
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - GA Baseline v2 - Step 02/03",
       "metadata": {
         "curriculum_role": "rq1_ga_intermediate",
         "curriculum_step": 2,
         "curriculum_steps": 3,
-        "hole_count": 13,
-        "hole_density": 0.090278,
+        "hole_count": 7,
+        "hole_density": 0.048611,
         "target_hole_density": 0.1,
         "baseline_type": "ga",
-        "ga_complexity": 0.3096735994878671
+        "ga_version": 2
       },
       "task_config": {
-        "hole_probability": 0.090278,
+        "hole_probability": 0.048611,
         "is_slippery": false,
         "map_desc": [
-          "SFFFFFFHFFFF",
-          "FFFHFFFFFFFH",
-          "FFFFFFFFFFHF",
-          "FFFFFFFFFFHF",
-          "HFFFFFFFFFFF",
+          "SFFFFFHHFFFF",
           "FFFFFFFFFFFF",
-          "FFHFFFFFFFFF",
-          "FHFFFFFFFFFF",
-          "FFFFFFHFFFFF",
-          "FHFHFFFFFFFF",
-          "FHFFFFFFFFFF",
-          "FFHFFFFFFFFG"
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFHF",
+          "FFFFFHFFFHFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFHF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFHFFFFFFFF",
+          "FFFFFFFFFFFF",
+          "FFFFFFFFFFFG"
         ],
         "size": 12,
         "success_rate": 0.333333
@@ -110,7 +110,7 @@
     {
       "environment_id": "frozen_lake",
       "task_id": 2,
-      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - GA Baseline - Step 03/03 (Target)",
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - GA Baseline v2 - Step 03/03 (Target)",
       "metadata": {
         "curriculum_role": "rq1_target",
         "curriculum_step": 3,
@@ -119,7 +119,7 @@
         "hole_density": 0.097222,
         "target_hole_density": 0.1,
         "baseline_type": "ga",
-        "ga_complexity": 0.343134885235181
+        "ga_version": 2
       },
       "task_config": {
         "hole_probability": 0.097222,
