@@ -41,6 +41,9 @@ RQ1_HOLE_DENSITIES: list[float] = [0.10, 0.20, 0.30, 0.40]
 # Number of intermediate steps per target density (target step not included)
 N_INTERMEDIATE: dict[float, int] = {0.10: 2, 0.20: 4, 0.30: 9, 0.40: 14}
 
+# Number of curriculum variants per baseline type (random / random_ordered)
+N_CURRICULA: int = 5
+
 # Training episodes per curriculum step (all steps including target)
 MAX_EPISODES: dict[float, int] = {0.10: 1000, 0.20: 2000, 0.30: 3000, 0.40: 4000}
 

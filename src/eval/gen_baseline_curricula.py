@@ -9,20 +9,27 @@ Two baselines per task:
 Both baselines share identical intermediate maps; only the ordering differs.
 Intermediate maps have hole densities sampled uniformly from [0, target_density].
 
+N_CURRICULA variants are generated per baseline type, numbered v01..vNN.
+Variant v01 reproduces the original seed (BASELINE_SEED), so it is identical
+to the legacy unsuffixed files.  Existing files are never overwritten.
+
 Prerequisites:
     Run gen_rq1_tasks.py first.
 
 Usage (from project root):
-    python src/eval/gen_baseline_curricula.py
+    python src/eval/gen_baseline_curricula.py [--n-curricula N]
 
 Output:
-    src/eval/curricula/baselines/rq1_seed<N>/task_001_random.json
-    src/eval/curricula/baselines/rq1_seed<N>/task_001_random_ordered.json
+    src/eval/curricula/baselines/rq1_seed<N>/task_001_random_v01.json
+    src/eval/curricula/baselines/rq1_seed<N>/task_001_random_v02.json
+    ...
+    src/eval/curricula/baselines/rq1_seed<N>/task_001_random_ordered_v01.json
     ...
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import random
 from collections import deque
@@ -36,6 +43,7 @@ from eval_config import (
     IS_SLIPPERY,
     MAX_EPISODE_LENGTH,
     MAX_EPISODES,
+    N_CURRICULA,
     N_INTERMEDIATE,
     RQ1_HOLE_DENSITIES,
     RQ1_SEED,
@@ -106,6 +114,21 @@ def _hole_density(map_desc: list[str]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Seed helpers
+# ---------------------------------------------------------------------------
+
+def _variant_seeds(variant: int) -> tuple[int, int]:
+    """Return (density_rng_seed, map_base_seed) for the given 1-indexed variant.
+
+    variant=1 reproduces the original BASELINE_SEED behaviour exactly:
+      density_rng_seed = BASELINE_SEED
+      map_seed(j)      = BASELINE_SEED + j + 1
+    """
+    k = variant - 1
+    return BASELINE_SEED + k, BASELINE_SEED + k * 1000
+
+
+# ---------------------------------------------------------------------------
 # Payload builder
 # ---------------------------------------------------------------------------
 
@@ -115,16 +138,8 @@ def _build_payload(
     curriculum_maps: list[list[str]],
     baseline_type: str,
     max_eps: int,
+    variant: int,
 ) -> dict[str, Any]:
-    """Build the full curriculum JSON payload.
-
-    Args:
-        task_idx:        1-based RQ1 task index.
-        target_density:  Nominal hole density of the RQ1 target (e.g. 0.30).
-        curriculum_maps: Ordered list of maps; last entry must be the RQ1 target.
-        baseline_type:   "random" or "random_ordered".
-        max_eps:         Max training episodes per step.
-    """
     n_steps = len(curriculum_maps)
     label = baseline_type.replace("_", " ").title()
 
@@ -142,7 +157,8 @@ def _build_payload(
         suffix = " (Target)" if is_target else ""
         task_name = (
             f"Frozen Lake {GRID_SIZE}x{GRID_SIZE} - RQ1 Task {task_idx:03d}"
-            f" - {label} Baseline - Step {step_num:02d}/{n_steps:02d}{suffix}"
+            f" - {label} Baseline v{variant:02d}"
+            f" - Step {step_num:02d}/{n_steps:02d}{suffix}"
         )
 
         steps.append({
@@ -165,6 +181,7 @@ def _build_payload(
                 "target_hole_density": target_density,
                 "baseline_type": baseline_type,
                 "baseline_seed": BASELINE_SEED,
+                "variant": variant,
             },
             "task_config": {
                 "hole_probability": round(density, 6),
@@ -215,6 +232,16 @@ def _load_rq1_tasks() -> list[tuple[int, float, list[str]]]:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    parser = argparse.ArgumentParser(prog="gen_baseline_curricula")
+    parser.add_argument(
+        "--n-curricula",
+        type=int,
+        default=N_CURRICULA,
+        help=f"Number of variants to generate per baseline type (default: {N_CURRICULA}).",
+    )
+    args = parser.parse_args()
+    n_curricula: int = args.n_curricula
+
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     rq1_tasks = _load_rq1_tasks()
 
@@ -222,39 +249,41 @@ def main() -> None:
         n_inter = N_INTERMEDIATE[target_density]
         max_eps = MAX_EPISODES[target_density]
 
-        # Sample intermediate densities uniformly from [0, target_density]
-        rng = random.Random(BASELINE_SEED)
-        inter_densities = [rng.uniform(0.0, target_density) for _ in range(n_inter)]
+        for variant in range(1, n_curricula + 1):
+            density_seed, map_base_seed = _variant_seeds(variant)
 
-        # Generate one map per intermediate density (shared by both baselines)
-        inter_maps: list[list[str]] = []
-        for j, density in enumerate(inter_densities):
-            inter_maps.append(generate_random_map(GRID_SIZE, density, BASELINE_SEED + j + 1))
+            # Sample intermediate densities
+            rng = random.Random(density_seed)
+            inter_densities = [rng.uniform(0.0, target_density) for _ in range(n_inter)]
 
-        # --- random baseline: sampled order + target ---
-        random_maps = inter_maps + [target_map]
-        random_payload = _build_payload(
-            task_idx, target_density, random_maps, "random", max_eps
-        )
-        random_path = _OUTPUT_DIR / f"task_{task_idx:03d}_random.json"
-        random_path.write_text(json.dumps(random_payload, indent=2), encoding="utf-8")
+            # Generate intermediate maps (shared by both baselines for this variant)
+            inter_maps: list[list[str]] = [
+                generate_random_map(GRID_SIZE, d, map_base_seed + j + 1)
+                for j, d in enumerate(inter_densities)
+            ]
 
-        # --- random_ordered baseline: sorted by density + target ---
-        sorted_inter = sorted(inter_maps, key=_hole_density)
-        ordered_maps = sorted_inter + [target_map]
-        ordered_payload = _build_payload(
-            task_idx, target_density, ordered_maps, "random_ordered", max_eps
-        )
-        ordered_path = _OUTPUT_DIR / f"task_{task_idx:03d}_random_ordered.json"
-        ordered_path.write_text(json.dumps(ordered_payload, indent=2), encoding="utf-8")
+            inter_densities_pct = [f"{d:.1%}" for d in inter_densities]
 
-        inter_densities_pct = [f"{d:.1%}" for d in inter_densities]
-        print(
-            f"[BASELINE] task_{task_idx:03d}  target={target_density:.0%}"
-            f"  steps={n_inter + 1}  max_episodes={max_eps}"
-            f"  inter_densities={inter_densities_pct}"
-            f"  seed={BASELINE_SEED}"
-        )
+            for baseline_type, ordered_maps in (
+                ("random", inter_maps + [target_map]),
+                ("random_ordered", sorted(inter_maps, key=_hole_density) + [target_map]),
+            ):
+                out = _OUTPUT_DIR / f"task_{task_idx:03d}_{baseline_type}_v{variant:02d}.json"
+                if out.exists():
+                    print(f"  [SKIP] {out.name} already exists")
+                    continue
+
+                payload = _build_payload(
+                    task_idx, target_density, ordered_maps, baseline_type, max_eps, variant
+                )
+                out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                print(
+                    f"[BASELINE] task_{task_idx:03d}  target={target_density:.0%}"
+                    f"  type={baseline_type}  v{variant:02d}"
+                    f"  steps={n_inter + 1}  max_episodes={max_eps}"
+                    f"  inter_densities={inter_densities_pct}"
+                    f"  density_seed={density_seed}"
+                )
 
     print("Done.")
 
