@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSlider,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -79,16 +78,11 @@ class EpisodeInspectorView(QWidget):
         )
         self.plugin_layout.addWidget(self.plugin_placeholder)
 
-        self.viewer = QTextEdit(self)
-        self.viewer.setReadOnly(True)
-        self.viewer.setPlaceholderText("Transition details will appear here.")
-
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addWidget(controls_group)
         layout.addWidget(self.summary_label)
-        layout.addWidget(self.plugin_group)
-        layout.addWidget(self.viewer, 1)
+        layout.addWidget(self.plugin_group, 1)
         self._render_empty_state()
 
     def set_context(self, plugin: EnvironmentPlugin | None) -> None:
@@ -200,7 +194,6 @@ class EpisodeInspectorView(QWidget):
 
     def _render_empty_state(self) -> None:
         self.summary_label.setText("No episode captured yet.")
-        self.viewer.setPlainText("Episode transition details will appear here.")
         self.create_task_btn.setEnabled(False)
 
     def _render_current_step(self) -> None:
@@ -213,8 +206,9 @@ class EpisodeInspectorView(QWidget):
             self.summary_label.setText(
                 f"Episode {trace.episode_id} | reward={trace.total_reward:.3f} | no steps"
             )
-            self.viewer.setPlainText("Episode has no transitions.")
             self.create_task_btn.setEnabled(False)
+            if self._replay_widget is not None:
+                self._replay_widget.set_frame(trace, 0)
             return
 
         timeline_index = self.step_slider.value()
@@ -224,7 +218,6 @@ class EpisodeInspectorView(QWidget):
         self.summary_label.setText(
             f"Run {run_label} | Episode {trace.episode_id} | reward={trace.total_reward:.3f} | success={trace.success}"
         )
-        self.viewer.setPlainText(self._format_step_details(trace, timeline_index))
         self.create_task_btn.setEnabled(self._can_create_task_from_moment)
 
         if self._replay_widget is not None:
@@ -241,61 +234,6 @@ class EpisodeInspectorView(QWidget):
             f"(steps={len(trace.steps)}, reward={trace.total_reward:.2f})"
         )
 
-    def _format_step_details(self, trace: EpisodeTrace, timeline_index: int) -> str:
-        lines = [
-            f"Run ID: {trace.run_id or 'unknown'}",
-            f"Episode {trace.episode_id}",
-            f"Total reward: {trace.total_reward:.3f}",
-            f"Success: {trace.success}",
-        ]
-
-        task_snapshot = trace.task_snapshot
-        if task_snapshot is not None:
-            environment_id = task_snapshot.environment_id
-            task_name = task_snapshot.task_name
-            lines.extend(
-                [
-                    f"Environment: {environment_id}",
-                    f"Task: {task_name}",
-                ]
-            )
-
-        if timeline_index == 0:
-            moment = self._moment_at(trace, timeline_index)
-            initial_observation = trace.initial_observation
-            if initial_observation is None and trace.steps:
-                initial_observation = trace.steps[0].observation
-            lines.extend(
-                [
-                    "",
-                    f"Step index: 0/{len(trace.steps)}",
-                    "Phase: initial observation before the first action",
-                    f"observation: {initial_observation}",
-                ]
-            )
-            if moment is not None and moment.restorable_env_state is not None:
-                lines.append(f"restorable_env_state: {moment.restorable_env_state}")
-            return "\n".join(lines)
-
-        step = trace.steps[timeline_index - 1]
-        moment = self._moment_at(trace, timeline_index)
-        lines.extend(
-            [
-                "",
-                f"Step index: {timeline_index}/{len(trace.steps)}",
-                f"t: {step.t}",
-                f"observation: {step.observation}",
-                f"action: {step.action}",
-                f"next_observation: {step.next_observation}",
-                f"reward: {step.reward:.3f}",
-                f"terminated: {step.terminated}",
-                f"truncated: {step.truncated}",
-            ]
-        )
-        if moment is not None and moment.restorable_env_state is not None:
-            lines.append(f"restorable_env_state: {moment.restorable_env_state}")
-        return "\n".join(lines)
-
     def _emit_create_task_from_current_moment(self) -> None:
         trace = self._current_trace
         if trace is None:
@@ -306,11 +244,6 @@ class EpisodeInspectorView(QWidget):
         if trace.moments:
             return max(0, len(trace.moments) - 1)
         return len(trace.steps)
-
-    def _moment_at(self, trace: EpisodeTrace, moment_index: int):
-        if 0 <= moment_index < len(trace.moments):
-            return trace.moments[moment_index]
-        return None
 
     def _same_trace(self, left: EpisodeTrace, right: EpisodeTrace) -> bool:
         if left is right:

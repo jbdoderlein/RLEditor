@@ -294,6 +294,115 @@ class _SB3PolicyDialog(QDialog):
         return host
 
 
+class _StateVisitHeatmapDialog(QDialog):
+    def __init__(
+        self,
+        *,
+        title: str,
+        map_rows: list[str],
+        visit_counts: dict[int, int],
+        episode_count: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(900, 620)
+        self.visit_cells: dict[tuple[int, int], QLabel] = {}
+
+        root = QVBoxLayout(self)
+        total_visits = sum(visit_counts.values())
+        root.addWidget(
+            QLabel(
+                f"Episodes: {episode_count} | recorded state visits: {total_visits}",
+                self,
+            )
+        )
+        root.addWidget(self._build_heatmap(map_rows, visit_counts), 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def _build_heatmap(self, map_rows: list[str], visit_counts: dict[int, int]) -> QWidget:
+        host = QWidget(self)
+        grid = QGridLayout(host)
+        grid.setHorizontalSpacing(4)
+        grid.setVerticalSpacing(4)
+
+        max_count = max(visit_counts.values(), default=0)
+        for row, map_row in enumerate(map_rows):
+            for col, tile in enumerate(map_row):
+                state_index = row * len(map_row) + col
+                count = visit_counts.get(state_index, 0)
+                label = QLabel(f"{tile}\n{state_index}\n{count}", host)
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                label.setMinimumSize(62, 52)
+                label.setStyleSheet(
+                    "QLabel { "
+                    f"background: {_visit_count_color(count, max_count=max_count)}; "
+                    "border: 1px solid #cbd5e1; border-radius: 4px; "
+                    "font-weight: 600; color: #0f172a; "
+                    "}"
+                )
+                self.visit_cells[(row, col)] = label
+                grid.addWidget(label, row, col)
+
+        return host
+
+
+class _CheckpointNodeActionDialog(QDialog):
+    def __init__(
+        self,
+        checkpoint: Checkpoint,
+        *,
+        can_show_q_table: bool,
+        can_show_policy: bool,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Checkpoint actions - {checkpoint.label or checkpoint.checkpoint_id}")
+        self._selected_action: str | None = None
+
+        root = QVBoxLayout(self)
+        label = QLabel(checkpoint.label or checkpoint.checkpoint_id, self)
+        label.setWordWrap(True)
+        root.addWidget(label)
+
+        actions_layout = QHBoxLayout()
+        self.rename_button = QPushButton("Rename", self)
+        self.evaluate_button = QPushButton("Run Evaluation", self)
+        self.show_q_table_button = QPushButton("Show Q Table", self)
+        self.show_policy_button = QPushButton("Show Policy", self)
+
+        self.show_q_table_button.setVisible(can_show_q_table)
+        self.show_q_table_button.setEnabled(can_show_q_table)
+        self.show_policy_button.setVisible(can_show_policy)
+        self.show_policy_button.setEnabled(can_show_policy)
+
+        for button, action in (
+            (self.rename_button, "rename"),
+            (self.evaluate_button, "evaluate"),
+            (self.show_q_table_button, "q_table"),
+            (self.show_policy_button, "policy"),
+        ):
+            button.clicked.connect(lambda _checked=False, action=action: self._accept_action(action))
+            actions_layout.addWidget(button)
+        actions_layout.addStretch(1)
+        root.addLayout(actions_layout)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    @property
+    def selected_action(self) -> str | None:
+        return self._selected_action
+
+    def _accept_action(self, action: str) -> None:
+        self._selected_action = action
+        self.accept()
+
+
 class _TrainingEdgeEditDialog(QDialog):
     def __init__(self, config: RunConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -761,6 +870,10 @@ def _coerce_policy_action(action: object) -> int | None:
 
 def _frozen_lake_map_rows(checkpoint: Checkpoint) -> list[str] | None:
     task_snapshot = checkpoint.task_snapshot
+    return _frozen_lake_map_rows_from_task_snapshot(task_snapshot)
+
+
+def _frozen_lake_map_rows_from_task_snapshot(task_snapshot: TaskSnapshot | None) -> list[str] | None:
     if task_snapshot is None or task_snapshot.environment_id != "frozen_lake":
         return None
     task_config = task_snapshot.task_config
@@ -815,10 +928,45 @@ def _q_value_color(value: float | None, *, min_value: float, max_value: float) -
     return QColor(red, green, blue).name()
 
 
+def _visit_count_color(count: int, *, max_count: int) -> str:
+    if count <= 0 or max_count <= 0:
+        return "#f8fafc"
+    ratio = max(0.0, min(1.0, count / max_count))
+    red = int(239 - 116 * ratio)
+    green = int(246 - 103 * ratio)
+    blue = int(255 - 63 * ratio)
+    return QColor(red, green, blue).name()
+
+
+def _coerce_state_index(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if hasattr(value, "item") and callable(getattr(value, "item")):
+        try:
+            return _coerce_state_index(value.item())
+        except Exception:
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        return int(text) if text.isdigit() else None
+    return None
+
+
+def _state_index_from_restorable_state(value: object) -> int | None:
+    if isinstance(value, dict):
+        return _coerce_state_index(value.get("state_index"))
+    state_index = getattr(value, "state_index", None)
+    return _coerce_state_index(state_index)
+
+
 class CheckpointGraphWidget(QWidget):
     node_selected = Signal(object)
     edge_selected = Signal(object)
     node_double_clicked = Signal(object)
+    edge_double_clicked = Signal(object)
+    delete_key_pressed = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -830,6 +978,7 @@ class CheckpointGraphWidget(QWidget):
         self._selected_edge_id: str | None = None
         self._content_size = QSize(900, 520)
         self.setMinimumSize(220, 140)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     @property
     def selected_node_id(self) -> str | None:
@@ -954,7 +1103,21 @@ class CheckpointGraphWidget(QWidget):
                     self.node_double_clicked.emit(node)
                     return
                 break
+
+        edge = self._edge_at(position)
+        if edge is not None:
+            self.select_edge(edge.edge_id)
+            self.edge_selected.emit(edge)
+            self.edge_double_clicked.emit(edge)
+            return
         super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Delete:
+            self.delete_key_pressed.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         _ = event
@@ -1213,6 +1376,7 @@ class CheckpointHistoryView(QWidget):
         self._selected_start_node_id: str | None = None
         self._q_table_checkpoint: Checkpoint | None = None
         self._sb3_policy_checkpoint: Checkpoint | None = None
+        self._current_segment_task_snapshot: TaskSnapshot | None = None
 
         root = QVBoxLayout(self)
 
@@ -1247,6 +1411,7 @@ class CheckpointHistoryView(QWidget):
             "Export the ordered curriculum with recorded episode traces."
         )
         self.export_curriculum_button.setEnabled(False)
+        self.export_curriculum_button.setVisible(False)
         self.export_curriculum_plan_button = QPushButton("Export Curriculum", right_panel)
         self.export_curriculum_plan_button.setToolTip(
             "Export only the executable curriculum structure: tasks and training steps."
@@ -1264,19 +1429,22 @@ class CheckpointHistoryView(QWidget):
         self.export_checkpoint_button.setEnabled(False)
         self.delete_checkpoint_button = QPushButton("Delete Checkpoint", right_panel)
         self.delete_checkpoint_button.setToolTip(
-            "Delete the selected checkpoint(s) and all descendant checkpoints."
+            "Delete the selected checkpoint(s) and all descendant checkpoints. Shortcut: Delete."
         )
         self.delete_checkpoint_button.setEnabled(False)
+        self.delete_checkpoint_button.setVisible(False)
         self.evaluate_checkpoint_button = QPushButton("Run Evaluation", right_panel)
         self.evaluate_checkpoint_button.setToolTip(
-            "Evaluate the selected checkpoint using the Evaluation tab settings."
+            "Evaluate the selected checkpoint using the Evaluation tab settings. Double-click a checkpoint to open this action."
         )
         self.evaluate_checkpoint_button.setEnabled(False)
+        self.evaluate_checkpoint_button.setVisible(False)
         self.live_edit_button = QPushButton("Live Edit", right_panel)
         self.live_edit_button.setToolTip(
-            "Edit this training edge and replay the deepest descendant branch."
+            "Edit this training edge and replay the deepest descendant branch. Double-click a branch to start live edit."
         )
         self.live_edit_button.setEnabled(False)
+        self.live_edit_button.setVisible(False)
         self.show_q_table_button = QPushButton("Show Q Table", right_panel)
         self.show_q_table_button.setToolTip(
             "Open the Q-learning table stored in the selected checkpoint."
@@ -1291,12 +1459,14 @@ class CheckpointHistoryView(QWidget):
         self.show_policy_button.setVisible(False)
         self.import_checkpoint_button = QPushButton("Import Checkpoint", right_panel)
         self.import_checkpoint_button.setToolTip(
-            "Import one checkpoint JSON into the current history."
+            "Import a checkpoint or curriculum JSON. The file content decides which importer is used."
         )
+        self.import_checkpoint_button.setText("Import")
         self.import_curriculum_button = QPushButton("Import Curriculum", right_panel)
         self.import_curriculum_button.setToolTip(
-            "Import and execute a curriculum JSON."
+            "Import a checkpoint or curriculum JSON. The file content decides which importer is used."
         )
+        self.import_curriculum_button.setVisible(False)
         self.selection_label = QLabel("Select a training edge to inspect a run.")
         self.selection_label.setWordWrap(True)
 
@@ -1316,35 +1486,39 @@ class CheckpointHistoryView(QWidget):
         self.episode_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.inspect_episode_button = QPushButton("Inspect Selected Episode", self.segment_group)
         self.inspect_episode_button.setEnabled(False)
+        self.state_visit_heatmap_button = QPushButton("Heatmap", self.segment_group)
+        self.state_visit_heatmap_button.setToolTip(
+            "Show a map heatmap of state visits across the listed episodes."
+        )
+        self.state_visit_heatmap_button.setEnabled(False)
 
         segment_layout.addWidget(self.segment_details)
         segment_layout.addWidget(self.episode_list, 1)
-        segment_layout.addWidget(self.inspect_episode_button)
+        episode_actions_layout = QHBoxLayout()
+        episode_actions_layout.addWidget(self.inspect_episode_button, 4)
+        episode_actions_layout.addWidget(self.state_visit_heatmap_button, 1)
+        segment_layout.addLayout(episode_actions_layout)
 
         actions_layout = QVBoxLayout()
-        plan_buttons_layout = QHBoxLayout()
-        plan_buttons_layout.addWidget(self.export_curriculum_plan_button)
-        plan_buttons_layout.addWidget(self.show_training_report_button)
-        plan_buttons_layout.addWidget(self.import_curriculum_button)
-        plan_buttons_layout.addStretch(1)
+        import_export_buttons_layout = QHBoxLayout()
+        import_export_buttons_layout.addWidget(self.import_checkpoint_button)
+        import_export_buttons_layout.addWidget(self.export_checkpoint_button)
+        import_export_buttons_layout.addWidget(self.export_curriculum_plan_button)
+        import_export_buttons_layout.addStretch(1)
 
-        checkpoint_buttons_layout = QHBoxLayout()
-        checkpoint_buttons_layout.addWidget(self.export_checkpoint_button)
-        checkpoint_buttons_layout.addWidget(self.delete_checkpoint_button)
-        checkpoint_buttons_layout.addWidget(self.import_checkpoint_button)
-        checkpoint_buttons_layout.addStretch(1)
+        secondary_buttons_layout = QHBoxLayout()
+        secondary_buttons_layout.addWidget(self.show_training_report_button)
+        secondary_buttons_layout.addWidget(self.delete_checkpoint_button)
+        secondary_buttons_layout.addWidget(self.import_curriculum_button)
+        secondary_buttons_layout.addWidget(self.live_edit_button)
+        secondary_buttons_layout.addWidget(self.export_curriculum_button)
+        secondary_buttons_layout.addWidget(self.evaluate_checkpoint_button)
+        secondary_buttons_layout.addWidget(self.show_q_table_button)
+        secondary_buttons_layout.addWidget(self.show_policy_button)
+        secondary_buttons_layout.addStretch(1)
 
-        trace_buttons_layout = QHBoxLayout()
-        trace_buttons_layout.addWidget(self.live_edit_button)
-        trace_buttons_layout.addWidget(self.export_curriculum_button)
-        trace_buttons_layout.addWidget(self.evaluate_checkpoint_button)
-        trace_buttons_layout.addWidget(self.show_q_table_button)
-        trace_buttons_layout.addWidget(self.show_policy_button)
-        trace_buttons_layout.addStretch(1)
-
-        actions_layout.addLayout(plan_buttons_layout)
-        actions_layout.addLayout(checkpoint_buttons_layout)
-        actions_layout.addLayout(trace_buttons_layout)
+        actions_layout.addLayout(import_export_buttons_layout)
+        actions_layout.addLayout(secondary_buttons_layout)
 
         right_layout.addWidget(self.training_source_label)
         right_layout.addLayout(actions_layout)
@@ -1362,9 +1536,12 @@ class CheckpointHistoryView(QWidget):
 
         self.graph_widget.node_selected.connect(self._show_node_details)
         self.graph_widget.edge_selected.connect(self._on_edge_selected)
-        self.graph_widget.node_double_clicked.connect(self._emit_rename_checkpoint_for_node)
+        self.graph_widget.node_double_clicked.connect(self._open_checkpoint_node_actions)
+        self.graph_widget.edge_double_clicked.connect(self._request_live_edit_for_edge)
+        self.graph_widget.delete_key_pressed.connect(self._emit_delete_selected_checkpoints)
         self.episode_list.currentRowChanged.connect(self._on_episode_selection_changed)
         self.inspect_episode_button.clicked.connect(self._emit_inspect_selected_episode)
+        self.state_visit_heatmap_button.clicked.connect(self._show_state_visit_heatmap)
         self.export_curriculum_button.clicked.connect(
             lambda _checked=False: self._export_selected_curriculum(include_episode_traces=True)
         )
@@ -1376,8 +1553,8 @@ class CheckpointHistoryView(QWidget):
         self.live_edit_button.clicked.connect(self._request_live_edit_for_selected_edge)
         self.show_q_table_button.clicked.connect(self._show_selected_q_table)
         self.show_policy_button.clicked.connect(self._show_selected_policy)
-        self.import_checkpoint_button.clicked.connect(self._import_checkpoint_from_file)
-        self.import_curriculum_button.clicked.connect(self._import_curriculum_from_file)
+        self.import_checkpoint_button.clicked.connect(self._import_from_file)
+        self.import_curriculum_button.clicked.connect(self._import_from_file)
 
         self._render_empty_selection()
 
@@ -1396,6 +1573,13 @@ class CheckpointHistoryView(QWidget):
             return not self._snapshot.checkpoints
         node = self.graph_widget.node_for_id(node_id)
         return node is not None and node.kind == "root"
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Delete:
+            self._emit_delete_selected_checkpoints()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def set_history(self, snapshot: TrainingHistorySnapshot) -> None:
         selected_node_ids = list(self.graph_widget.selected_node_ids)
@@ -1456,7 +1640,9 @@ class CheckpointHistoryView(QWidget):
         self.segment_details.setPlainText("Training run details and recorded episodes will appear here.")
         self.episode_list.clear()
         self._current_segment_episodes = []
+        self._current_segment_task_snapshot = None
         self.inspect_episode_button.setEnabled(False)
+        self.state_visit_heatmap_button.setEnabled(False)
         self._set_export_buttons_enabled(False)
         self._set_live_edit_button_enabled(False)
         self._set_q_table_checkpoint(None)
@@ -1468,7 +1654,9 @@ class CheckpointHistoryView(QWidget):
         self.segment_details.setPlainText("Training run details and recorded episodes will appear here.")
         self.episode_list.clear()
         self._current_segment_episodes = []
+        self._current_segment_task_snapshot = None
         self.inspect_episode_button.setEnabled(False)
+        self.state_visit_heatmap_button.setEnabled(False)
         self._set_live_edit_button_enabled(False)
 
     def _show_node_details(self, node: _LineageNode) -> None:
@@ -1526,6 +1714,7 @@ class CheckpointHistoryView(QWidget):
         self._set_sb3_policy_checkpoint(None)
         checkpoint = edge.target_checkpoint
         run = edge.run
+        self._current_segment_task_snapshot = edge.task_snapshot or checkpoint.task_snapshot
         self._set_export_buttons_enabled(True)
         self._set_live_edit_button_enabled(self._live_edit_config_for_edge(edge) is not None)
         self.selection_label.setText(
@@ -1549,6 +1738,7 @@ class CheckpointHistoryView(QWidget):
             self.inspect_episode_button.setEnabled(True)
         else:
             self.inspect_episode_button.setEnabled(False)
+        self._refresh_state_visit_heatmap_button()
 
     def _on_edge_selected(self, edge: _LineageEdge) -> None:
         self._show_edge_details(edge)
@@ -1607,6 +1797,12 @@ class CheckpointHistoryView(QWidget):
             )
             return
 
+        self._request_live_edit_for_edge(edge)
+
+    def _request_live_edit_for_edge(self, edge: _LineageEdge) -> None:
+        self.graph_widget.select_edge(edge.edge_id)
+        self._show_edge_details(edge)
+
         config = self._live_edit_config_for_edge(edge)
         if config is None:
             QMessageBox.information(
@@ -1626,6 +1822,10 @@ class CheckpointHistoryView(QWidget):
         evaluation = checkpoint.metadata.get("evaluation")
         evaluation_error = checkpoint.metadata.get("evaluation_error")
         episodes = self._evaluation_episodes_for_checkpoint(checkpoint)
+        self._current_segment_task_snapshot = self._task_snapshot_for_heatmap(
+            episodes,
+            fallback=checkpoint.task_snapshot,
+        )
         self.episode_list.clear()
         self._current_segment_episodes = list(episodes)
 
@@ -1663,6 +1863,7 @@ class CheckpointHistoryView(QWidget):
             self.inspect_episode_button.setEnabled(True)
         else:
             self.inspect_episode_button.setEnabled(False)
+        self._refresh_state_visit_heatmap_button()
 
     def _evaluation_episodes_for_checkpoint(self, checkpoint: Checkpoint) -> list[EpisodeTrace]:
         evaluation = checkpoint.metadata.get("evaluation")
@@ -1682,6 +1883,103 @@ class CheckpointHistoryView(QWidget):
             return
         self.inspect_episode_requested.emit(self._current_segment_episodes[row])
 
+    def _refresh_state_visit_heatmap_button(self) -> None:
+        self.state_visit_heatmap_button.setEnabled(self._state_visit_heatmap_context() is not None)
+
+    def _show_state_visit_heatmap(self) -> None:
+        context = self._state_visit_heatmap_context()
+        if context is None:
+            QMessageBox.information(
+                self,
+                "State Visit Heatmap",
+                "Select a Frozen Lake node or branch with recorded episodes first.",
+            )
+            return
+
+        map_rows, visit_counts, episodes = context
+        self._build_state_visit_heatmap_dialog(
+            map_rows=map_rows,
+            visit_counts=visit_counts,
+            episodes=episodes,
+        ).exec()
+
+    def _build_state_visit_heatmap_dialog(
+        self,
+        *,
+        map_rows: list[str],
+        visit_counts: dict[int, int],
+        episodes: list[EpisodeTrace],
+    ) -> _StateVisitHeatmapDialog:
+        return _StateVisitHeatmapDialog(
+            title="State Visit Heatmap",
+            map_rows=map_rows,
+            visit_counts=visit_counts,
+            episode_count=len(episodes),
+            parent=self,
+        )
+
+    def _state_visit_heatmap_context(self) -> tuple[list[str], dict[int, int], list[EpisodeTrace]] | None:
+        episodes = list(self._current_segment_episodes)
+        if not episodes:
+            return None
+
+        task_snapshot = self._task_snapshot_for_heatmap(
+            episodes,
+            fallback=self._current_segment_task_snapshot,
+        )
+        map_rows = _frozen_lake_map_rows_from_task_snapshot(task_snapshot)
+        if map_rows is None:
+            return None
+
+        visit_counts = self._state_visit_counts(episodes, map_rows)
+        return map_rows, visit_counts, episodes
+
+    def _task_snapshot_for_heatmap(
+        self,
+        episodes: list[EpisodeTrace],
+        *,
+        fallback: TaskSnapshot | None,
+    ) -> TaskSnapshot | None:
+        for trace in episodes:
+            task_snapshot = trace.task_snapshot
+            if task_snapshot is not None and task_snapshot.environment_id == "frozen_lake":
+                return task_snapshot
+        if fallback is not None and fallback.environment_id == "frozen_lake":
+            return fallback
+        return None
+
+    def _state_visit_counts(
+        self,
+        episodes: list[EpisodeTrace],
+        map_rows: list[str],
+    ) -> dict[int, int]:
+        state_count = len(map_rows) * (len(map_rows[0]) if map_rows else 0)
+        visit_counts: dict[int, int] = {}
+        for trace in episodes:
+            for state_index in self._state_visit_sequence(trace):
+                if state_index is None or state_index < 0 or state_index >= state_count:
+                    continue
+                visit_counts[state_index] = visit_counts.get(state_index, 0) + 1
+        return visit_counts
+
+    def _state_visit_sequence(self, trace: EpisodeTrace) -> list[int | None]:
+        if trace.moments:
+            states: list[int | None] = []
+            for moment in trace.moments:
+                state_index = _coerce_state_index(moment.observation)
+                if state_index is None:
+                    state_index = _state_index_from_restorable_state(moment.restorable_env_state)
+                states.append(state_index)
+            return states
+
+        initial_observation = trace.initial_observation
+        if initial_observation is None and trace.steps:
+            initial_observation = trace.steps[0].observation
+        return [
+            _coerce_state_index(initial_observation),
+            *(_coerce_state_index(step.next_observation) for step in trace.steps),
+        ]
+
     def _set_export_buttons_enabled(self, enabled: bool) -> None:
         self.export_curriculum_button.setEnabled(enabled)
         self.export_curriculum_plan_button.setEnabled(enabled)
@@ -1696,13 +1994,13 @@ class CheckpointHistoryView(QWidget):
     def _set_q_table_checkpoint(self, checkpoint: Checkpoint | None) -> None:
         enabled = _checkpoint_has_q_learning_state(checkpoint)
         self._q_table_checkpoint = checkpoint if enabled else None
-        self.show_q_table_button.setVisible(enabled)
+        self.show_q_table_button.setVisible(False)
         self.show_q_table_button.setEnabled(enabled)
 
     def _set_sb3_policy_checkpoint(self, checkpoint: Checkpoint | None) -> None:
         enabled = _checkpoint_has_sb3_policy_state(checkpoint)
         self._sb3_policy_checkpoint = checkpoint if enabled else None
-        self.show_policy_button.setVisible(enabled)
+        self.show_policy_button.setVisible(False)
         self.show_policy_button.setEnabled(enabled)
 
     def _show_selected_q_table(self) -> None:
@@ -1884,10 +2182,10 @@ class CheckpointHistoryView(QWidget):
             return
         self.checkpoint_delete_requested.emit(checkpoint_ids)
 
-    def _import_checkpoint_from_file(self) -> None:
+    def _import_from_file(self) -> None:
         selected_path, _selected_filter = QFileDialog.getOpenFileName(
             self,
-            "Import Checkpoint",
+            "Import",
             "",
             "JSON Files (*.json);;All Files (*)",
         )
@@ -1897,40 +2195,27 @@ class CheckpointHistoryView(QWidget):
         path = Path(selected_path).expanduser()
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            if self._is_curriculum_plan_payload(payload):
+                self._validate_curriculum_plan_payload(payload)
+                self.curriculum_import_requested.emit(payload)
+                return
+
             checkpoint = self._checkpoint_from_import_payload(payload)
         except (OSError, TypeError, ValueError) as exc:
             QMessageBox.warning(
                 self,
-                "Import Checkpoint",
-                f"Could not import checkpoint:\n{exc}",
+                "Import",
+                f"Could not import file:\n{exc}",
             )
             return
 
         self.checkpoint_import_requested.emit(checkpoint)
 
+    def _import_checkpoint_from_file(self) -> None:
+        self._import_from_file()
+
     def _import_curriculum_from_file(self) -> None:
-        selected_path, _selected_filter = QFileDialog.getOpenFileName(
-            self,
-            "Import Curriculum",
-            "",
-            "JSON Files (*.json);;All Files (*)",
-        )
-        if not selected_path:
-            return
-
-        path = Path(selected_path).expanduser()
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            self._validate_curriculum_plan_payload(payload)
-        except (OSError, TypeError, ValueError) as exc:
-            QMessageBox.warning(
-                self,
-                "Import Curriculum",
-                f"Could not import curriculum:\n{exc}",
-            )
-            return
-
-        self.curriculum_import_requested.emit(payload)
+        self._import_from_file()
 
     def _emit_evaluate_selected_checkpoint(self) -> None:
         checkpoint = self._selected_export_checkpoint()
@@ -1947,6 +2232,33 @@ class CheckpointHistoryView(QWidget):
         if node.checkpoint is None:
             return
         self.checkpoint_rename_requested.emit(node.checkpoint)
+
+    def _open_checkpoint_node_actions(self, node: _LineageNode) -> None:
+        checkpoint = node.checkpoint
+        if checkpoint is None:
+            return
+
+        dialog = self._build_checkpoint_node_action_dialog(checkpoint)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        action = dialog.selected_action
+        if action == "rename":
+            self.checkpoint_rename_requested.emit(checkpoint)
+        elif action == "evaluate":
+            self.checkpoint_evaluation_requested.emit(checkpoint)
+        elif action == "q_table" and _checkpoint_has_q_learning_state(checkpoint):
+            self._build_q_table_dialog(checkpoint).exec()
+        elif action == "policy" and _checkpoint_has_sb3_policy_state(checkpoint):
+            self._build_policy_dialog(checkpoint).exec()
+
+    def _build_checkpoint_node_action_dialog(self, checkpoint: Checkpoint) -> _CheckpointNodeActionDialog:
+        return _CheckpointNodeActionDialog(
+            checkpoint,
+            can_show_q_table=_checkpoint_has_q_learning_state(checkpoint),
+            can_show_policy=_checkpoint_has_sb3_policy_state(checkpoint),
+            parent=self,
+        )
 
     def _selected_export_checkpoint(self) -> Checkpoint | None:
         selected_edge_id = self.graph_widget.selected_edge_id
@@ -2309,6 +2621,13 @@ class CheckpointHistoryView(QWidget):
         environments = payload.get("environments")
         if not isinstance(environments, list) or not environments:
             raise ValueError("Curriculum must contain environment/task definitions.")
+
+    def _is_curriculum_plan_payload(self, payload: object) -> bool:
+        return (
+            isinstance(payload, dict)
+            and "checkpoint_id" not in payload
+            and ("curriculum" in payload or "environments" in payload)
+        )
 
     def _checkpoint_lineage(self, target_checkpoint: Checkpoint) -> list[Checkpoint]:
         checkpoints_by_id = {

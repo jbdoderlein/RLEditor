@@ -7,10 +7,18 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog
 
 from rleditor.application.services import TrainingHistorySnapshot
-from rleditor.core.models import Checkpoint, EpisodeTrace, RunConfig, TaskSnapshot, TrainingRun, TrainingStatus
+from rleditor.core.models import (
+    Checkpoint,
+    EpisodeStep,
+    EpisodeTrace,
+    RunConfig,
+    TaskSnapshot,
+    TrainingRun,
+    TrainingStatus,
+)
 from rleditor.ui.views.checkpoint_history_view import CheckpointHistoryView, _TrainingEdgeEditDialog
 
 
@@ -432,6 +440,177 @@ def test_checkpoint_history_view_live_edit_request_emits_selected_edge(monkeypat
     assert emitted == [(edge, emitted_config)]
 
 
+def test_checkpoint_history_view_state_visit_heatmap_counts_selected_edge_episodes() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    task_snapshot = TaskSnapshot(
+        environment_id="frozen_lake",
+        task_name="Heatmap Task",
+        task_config={"map_desc": ["SF", "FG"]},
+    )
+    run = TrainingRun(
+        run_id="run_heatmap",
+        task_id="task_heatmap",
+        status=TrainingStatus.FINISHED,
+        metadata={"run_config": RunConfig(max_episodes=2).to_dict()},
+    )
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_heatmap",
+        label="Heatmap checkpoint",
+        created_at="2026-05-17 09:10:00",
+        reason="run_finished",
+        run_id="run_heatmap",
+        task_id="task_heatmap",
+        task_name="Heatmap Task",
+        step=3,
+        episode=2,
+        task_snapshot=task_snapshot,
+    )
+    view.set_history(
+        TrainingHistorySnapshot(
+            runs=[run],
+            checkpoints=[checkpoint],
+            episodes_by_run={
+                "run_heatmap": [
+                    EpisodeTrace(
+                        episode_id=1,
+                        run_id="run_heatmap",
+                        total_reward=1.0,
+                        success=True,
+                        initial_observation=0,
+                        steps=[
+                            EpisodeStep(
+                                t=0,
+                                observation=0,
+                                action=2,
+                                next_observation=1,
+                                reward=0.0,
+                                terminated=False,
+                            ),
+                            EpisodeStep(
+                                t=1,
+                                observation=1,
+                                action=1,
+                                next_observation=3,
+                                reward=1.0,
+                                terminated=True,
+                            ),
+                        ],
+                    ),
+                    EpisodeTrace(
+                        episode_id=2,
+                        run_id="run_heatmap",
+                        total_reward=0.0,
+                        success=False,
+                        initial_observation=1,
+                        steps=[
+                            EpisodeStep(
+                                t=0,
+                                observation=1,
+                                action=2,
+                                next_observation=1,
+                                reward=0.0,
+                                terminated=False,
+                            ),
+                        ],
+                    ),
+                ]
+            },
+            run_task_snapshots={"run_heatmap": task_snapshot},
+        )
+    )
+    edge = view.graph_widget.edge_for_id("edge:checkpoint_heatmap")
+    assert edge is not None
+    view._show_edge_details(edge)
+
+    action_row = view.inspect_episode_button.parentWidget().layout().itemAt(2).layout()
+    assert action_row.stretch(0) == 4
+    assert action_row.stretch(1) == 1
+    assert view.state_visit_heatmap_button.isEnabled()
+
+    context = view._state_visit_heatmap_context()
+    assert context is not None
+    map_rows, visit_counts, episodes = context
+    assert map_rows == ["SF", "FG"]
+    assert len(episodes) == 2
+    assert visit_counts == {0: 1, 1: 3, 3: 1}
+
+    dialog = view._build_state_visit_heatmap_dialog(
+        map_rows=map_rows,
+        visit_counts=visit_counts,
+        episodes=episodes,
+    )
+    try:
+        assert dialog.visit_cells[(0, 0)].text() == "S\n0\n1"
+        assert dialog.visit_cells[(0, 1)].text() == "F\n1\n3"
+        assert dialog.visit_cells[(1, 0)].text() == "F\n2\n0"
+        assert dialog.visit_cells[(1, 1)].text() == "G\n3\n1"
+    finally:
+        dialog.close()
+
+
+def test_checkpoint_history_view_double_click_edge_requests_live_edit(monkeypatch) -> None:
+    _app()
+    view = CheckpointHistoryView()
+    config = RunConfig(max_episodes=3, max_steps_per_episode=20)
+    emitted_config = RunConfig(max_episodes=4, max_steps_per_episode=30)
+    run = TrainingRun(
+        run_id="run_live_edit",
+        task_id="task_live_edit",
+        status=TrainingStatus.FINISHED,
+        metadata={"run_config": config.to_dict()},
+    )
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_live_edit",
+        label="Live edit checkpoint",
+        created_at="2026-05-17 09:10:00",
+        reason="run_finished",
+        run_id="run_live_edit",
+        task_id="task_live_edit",
+        task_name="Live Edit Task",
+        step=60,
+        episode=3,
+        task_snapshot=TaskSnapshot(environment_id="tiny_env", task_name="Live Edit Task"),
+    )
+    view.set_history(
+        TrainingHistorySnapshot(
+            runs=[run],
+            checkpoints=[checkpoint],
+            episodes_by_run={},
+            run_task_snapshots={},
+        )
+    )
+    edge = view.graph_widget.edge_for_id("edge:checkpoint_live_edit")
+    assert edge is not None
+
+    class _FakeDialog:
+        def __init__(self, config: RunConfig, parent=None) -> None:
+            _ = config, parent
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def edited_config(self) -> RunConfig:
+            return emitted_config
+
+    monkeypatch.setattr(
+        "rleditor.ui.views.checkpoint_history_view._TrainingEdgeEditDialog",
+        _FakeDialog,
+    )
+    emitted: list[tuple[object, RunConfig]] = []
+    view.training_edge_live_edit_requested.connect(lambda edge, config: emitted.append((edge, config)))
+
+    midpoint_x = (edge.source_point.x() + edge.target_point.x()) / 2
+    midpoint_y = (edge.source_point.y() + edge.target_point.y()) / 2
+    QTest.mouseDClick(
+        view.graph_widget,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(int(midpoint_x), int(midpoint_y)),
+    )
+
+    assert emitted == [(edge, emitted_config)]
+
+
 def test_checkpoint_history_view_multiple_node_selection_compares_metric_columns() -> None:
     _app()
     view = CheckpointHistoryView()
@@ -528,7 +707,18 @@ def test_checkpoint_history_view_emits_manual_evaluation_for_selected_checkpoint
     view.checkpoint_evaluation_requested.connect(captured.append)
     view.set_history(TrainingHistorySnapshot([], [checkpoint], {}, {}))
 
-    view.evaluate_checkpoint_button.click()
+    assert view.evaluate_checkpoint_button.isHidden()
+    node = view.graph_widget.node_for_id("checkpoint_004")
+    assert node is not None
+
+    class _FakeDialog:
+        selected_action = "evaluate"
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    view._build_checkpoint_node_action_dialog = lambda _checkpoint: _FakeDialog()  # type: ignore[method-assign]
+    view._open_checkpoint_node_actions(node)
 
     assert captured
     assert captured[0].checkpoint_id == "checkpoint_004"
@@ -569,7 +759,8 @@ def test_checkpoint_history_view_emits_delete_for_selected_checkpoints() -> None
     assert node_b is not None
     view._show_node_details(node_b)
 
-    view.delete_checkpoint_button.click()
+    assert view.delete_checkpoint_button.isHidden()
+    QTest.keyClick(view.graph_widget, Qt.Key.Key_Delete)
 
     assert captured == [["checkpoint_a", "checkpoint_b"]]
 
@@ -607,7 +798,13 @@ def test_checkpoint_history_view_shows_q_table_for_q_learning_node() -> None:
     view.set_history(TrainingHistorySnapshot([], [checkpoint], {}, {}))
 
     assert view.show_q_table_button.isEnabled()
-    assert not view.show_q_table_button.isHidden()
+    assert view.show_q_table_button.isHidden()
+    actions_dialog = view._build_checkpoint_node_action_dialog(checkpoint)
+    try:
+        assert actions_dialog.show_q_table_button.isEnabled()
+        assert not actions_dialog.show_q_table_button.isHidden()
+    finally:
+        actions_dialog.close()
     dialog = view._build_q_table_dialog(checkpoint)
     try:
         assert not hasattr(dialog, "q_table")
@@ -617,7 +814,7 @@ def test_checkpoint_history_view_shows_q_table_for_q_learning_node() -> None:
         dialog.close()
 
 
-def test_checkpoint_history_view_double_click_checkpoint_requests_rename() -> None:
+def test_checkpoint_history_view_double_click_checkpoint_opens_actions_and_requests_rename() -> None:
     _app()
     view = CheckpointHistoryView()
     checkpoint = Checkpoint(
@@ -633,6 +830,14 @@ def test_checkpoint_history_view_double_click_checkpoint_requests_rename() -> No
     node = view.graph_widget.node_for_id("checkpoint_rename")
     assert node is not None
     assert node.label == "Old checkpoint name"
+
+    class _FakeDialog:
+        selected_action = "rename"
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    view._build_checkpoint_node_action_dialog = lambda _checkpoint: _FakeDialog()  # type: ignore[method-assign]
 
     QTest.mouseDClick(
         view.graph_widget,
@@ -690,7 +895,13 @@ def test_checkpoint_history_view_shows_sb3_policy_map_for_frozen_lake_checkpoint
     view.set_history(TrainingHistorySnapshot([], [checkpoint], {}, {}))
 
     assert view.show_policy_button.isEnabled()
-    assert not view.show_policy_button.isHidden()
+    assert view.show_policy_button.isHidden()
+    actions_dialog = view._build_checkpoint_node_action_dialog(checkpoint)
+    try:
+        assert actions_dialog.show_policy_button.isEnabled()
+        assert not actions_dialog.show_policy_button.isHidden()
+    finally:
+        actions_dialog.close()
     dialog = view._build_policy_dialog(checkpoint)
     try:
         assert dialog.policy_cells[(0, 0)].text() == "S\n←"
@@ -762,13 +973,57 @@ def test_checkpoint_history_view_parses_imported_checkpoint_payload() -> None:
     assert parsed.metadata["algorithm"] == "sb3_dqn"
 
 
+def test_checkpoint_history_view_merged_import_routes_by_file_content(monkeypatch, tmp_path) -> None:
+    _app()
+    view = CheckpointHistoryView()
+    checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_imported",
+        label="Imported checkpoint",
+        created_at="2026-04-28 12:00:00",
+        reason="import_test",
+        task_snapshot=TaskSnapshot(environment_id="frozen_lake", task_name="Imported Task"),
+    )
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text(json.dumps(checkpoint.to_dict()), encoding="utf-8")
+    curriculum_payload = {
+        "curriculum": {"steps": [{"step_id": 1, "env_id": 0, "steps": 10}]},
+        "environments": [{"environment_id": "tiny_env", "task_name": "Task"}],
+    }
+    curriculum_path = tmp_path / "curriculum.json"
+    curriculum_path.write_text(json.dumps(curriculum_payload), encoding="utf-8")
+
+    imported_checkpoints: list[Checkpoint] = []
+    imported_curricula: list[object] = []
+    view.checkpoint_import_requested.connect(imported_checkpoints.append)
+    view.curriculum_import_requested.connect(imported_curricula.append)
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(checkpoint_path), "JSON Files (*.json)"),
+    )
+    view._import_from_file()
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(curriculum_path), "JSON Files (*.json)"),
+    )
+    view._import_from_file()
+
+    assert [item.checkpoint_id for item in imported_checkpoints] == ["checkpoint_imported"]
+    assert imported_curricula == [curriculum_payload]
+
+
 def test_checkpoint_history_view_builds_curriculum_export_for_selected_lineage() -> None:
     _app()
     view = CheckpointHistoryView()
     assert view.export_curriculum_plan_button.text() == "Export Curriculum"
     assert view.show_training_report_button.text() == "Show Training Report"
-    assert view.import_curriculum_button.text() == "Import Curriculum"
+    assert view.import_checkpoint_button.text() == "Import"
+    assert view.import_curriculum_button.isHidden()
     assert view.export_curriculum_button.text() == "Export Trace"
+    assert view.export_curriculum_button.isHidden()
     main_task = TaskSnapshot(
         environment_id="frozen_lake",
         task_name="Main Task",
