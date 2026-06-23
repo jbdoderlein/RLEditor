@@ -1,0 +1,170 @@
+{
+  "curriculum": {
+    "size": 3,
+    "steps": [
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 0,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 100,
+        "step_id": 1,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 1,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 300,
+        "step_id": 2,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 2,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 300,
+        "step_id": 3,
+        "steps": null
+      }
+    ]
+  },
+  "environments": [
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {},
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.1,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFHFFFF",
+          "FFFHFFFFFFFH",
+          "FFFFFFFFFFHF",
+          "FFFFFFFFFFHF",
+          "HFFFFFFFHFFF",
+          "FFFFFFFFFFFF",
+          "FFHFFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFFFFFHFFFFF",
+          "FHFHFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFHFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "task_id": 0,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 001",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {
+        "derivation_reason": "start_from_episode_moment",
+        "derived_from": "Frozen Lake 12x12 - RQ1 Task 001 - Human - remove-hole",
+        "episode_seed": null,
+        "run_id": "run_e90a87da",
+        "seed": null,
+        "source_episode_id": 97,
+        "source_moment_index": 46,
+        "source_run_id": "run_e90a87da"
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.1,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFHFFFF",
+          "FFFHFFFFFFFH",
+          "FFFFFFFFFFHF",
+          "FFFFFFFFFFHF",
+          "HFFFFFFFHFFF",
+          "FFFFFFFFFFFF",
+          "FFHFFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFFFFFHFFFFF",
+          "FHFHFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFHFFFFFFFFG"
+        ],
+        "size": 12,
+        "start_state": 78,
+        "success_rate": 0.333333
+      },
+      "task_id": 1,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - Human - remove-hole - From Episode 97 Step 46",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {
+        "derivation_reason": "start_from_episode_moment",
+        "derived_from": "Frozen Lake 12x12 - RQ1 Task 001 - Human - remove-hole - From Episode 97 Step 46",
+        "episode_seed": null,
+        "run_id": "run_594c6d70",
+        "seed": null,
+        "source_episode_id": 300,
+        "source_moment_index": 0,
+        "source_run_id": "run_594c6d70"
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.1,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFHFFFF",
+          "FFFHFFFFFFFH",
+          "FFFFFFFFFFHF",
+          "FFFFFFFFFFHF",
+          "HFFFFFFFHFFF",
+          "FFFFFFFFFFFF",
+          "FFHFFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFFFFFHFFFFF",
+          "FHFHFFFFFFFF",
+          "FHFFFFFFFFFF",
+          "FFHFFFFFFFFG"
+        ],
+        "size": 12,
+        "start_state": 0,
+        "success_rate": 0.333333
+      },
+      "task_id": 2,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 001 - Human - remove-hole - From Episode 97 Step 46 - From Episode 300 Step 0",
+      "termination_config": {}
+    }
+  ],
+  "evaluation": {
+    "eval_episodes": 10,
+    "eval_seed": null,
+    "evaluation_env": 0,
+    "max_episode_length": 100
+  }
+}

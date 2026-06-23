@@ -1,0 +1,272 @@
+{
+  "curriculum": {
+    "size": 5,
+    "steps": [
+      {
+        "algorithm": "q_learning",
+        "breakpoints": [
+          {
+            "actions": [
+              "pause",
+              "checkpoint"
+            ],
+            "breakpoint_id": null,
+            "kind": "success_rate_gte",
+            "label": null,
+            "value": 0.9,
+            "window": null
+          }
+        ],
+        "discount_factor": 0.99,
+        "env_id": 0,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 400,
+        "step_id": 1,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "breakpoints": [
+          {
+            "actions": [
+              "pause",
+              "checkpoint"
+            ],
+            "breakpoint_id": null,
+            "kind": "success_rate_gte",
+            "label": null,
+            "value": 0.9,
+            "window": null
+          }
+        ],
+        "discount_factor": 0.99,
+        "env_id": 1,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 2500,
+        "step_id": 2,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "breakpoints": [
+          {
+            "actions": [
+              "pause",
+              "checkpoint"
+            ],
+            "breakpoint_id": null,
+            "kind": "success_rate_gte",
+            "label": null,
+            "value": 0.9,
+            "window": null
+          }
+        ],
+        "discount_factor": 0.99,
+        "env_id": 2,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 6000,
+        "step_id": 3,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "breakpoints": [
+          {
+            "actions": [
+              "pause",
+              "checkpoint"
+            ],
+            "breakpoint_id": null,
+            "kind": "success_rate_gte",
+            "label": null,
+            "value": 0.9,
+            "window": null
+          }
+        ],
+        "discount_factor": 0.99,
+        "env_id": 2,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 2000,
+        "step_id": 4,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "breakpoints": [
+          {
+            "actions": [
+              "pause",
+              "checkpoint"
+            ],
+            "breakpoint_id": null,
+            "kind": "success_rate_gte",
+            "label": null,
+            "value": 0.9,
+            "window": null
+          }
+        ],
+        "discount_factor": 0.99,
+        "env_id": 3,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 5000,
+        "step_id": 5,
+        "steps": null
+      }
+    ]
+  },
+  "environments": [
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {},
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFGFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFF"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "task_id": 0,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 Copy",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {},
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "FFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHSFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "task_id": 1,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 Copy Copy Copy",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {},
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "FFFFHFFHFFHF",
+          "HFFFSFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFGFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFF"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "task_id": 2,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 Copy Copy",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {},
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "task_id": 3,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004",
+      "termination_config": {}
+    }
+  ],
+  "evaluation": {
+    "eval_episodes": 100,
+    "eval_seed": null,
+    "evaluation_env": 3,
+    "max_episode_length": 100
+  }
+}

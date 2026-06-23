@@ -1,0 +1,469 @@
+{
+  "curriculum": {
+    "size": 10,
+    "steps": [
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 0,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 100,
+        "step_id": 1,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 1,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 100,
+        "step_id": 2,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 2,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 500,
+        "step_id": 3,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 3,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 200,
+        "step_id": 4,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 4,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 200,
+        "step_id": 5,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 3,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 200,
+        "step_id": 6,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 5,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 200,
+        "step_id": 7,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 6,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 200,
+        "step_id": 8,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 7,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 500,
+        "step_id": 9,
+        "steps": null
+      },
+      {
+        "algorithm": "q_learning",
+        "discount_factor": 0.99,
+        "env_id": 0,
+        "episode_trace_sample_rate": 1.0,
+        "epsilon_start": 1.0,
+        "learning_rate": 0.1,
+        "max_episode_length": 100,
+        "max_episodes": 200,
+        "step_id": 10,
+        "steps": null
+      }
+    ]
+  },
+  "environments": [
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {},
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "task_id": 0,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {
+        "derivation_reason": "start_from_episode_moment",
+        "derived_from": "Frozen Lake 12x12 - RQ1 Task 004",
+        "episode_seed": null,
+        "run_id": "run_7e25f779",
+        "seed": null,
+        "source_episode_id": 100,
+        "source_moment_index": 19,
+        "source_run_id": "run_7e25f779"
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFFFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "start_state": 27,
+        "success_rate": 0.333333
+      },
+      "task_id": 1,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - From Episode 100 Step 19",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {
+        "derivation_reason": "start_from_episode_moment",
+        "derived_from": "Frozen Lake 12x12 - RQ1 Task 004 - From Episode 100 Step 19",
+        "episode_seed": null,
+        "run_id": "run_cc9aa283",
+        "seed": null,
+        "source_episode_id": 94,
+        "source_moment_index": 1,
+        "source_run_id": "run_cc9aa283"
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFFFFFFFFH",
+          "HHFHFFFFFHFF",
+          "HHHHFFFFHHFH",
+          "HHFHFFFFFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "start_state": 28,
+        "success_rate": 0.333333
+      },
+      "task_id": 2,
+      "task_name": "Frozen Lake 12x12 - RQ1 Task 004 - From Episode 100 Step 19 - From Episode 94 Step 1",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {
+        "derivation_reason": "start_from_episode_moment",
+        "derived_from": "Frozen Lake 12x12 - RQ1 Task 004",
+        "episode_seed": null,
+        "run_id": "run_7e25f779",
+        "seed": null,
+        "source_episode_id": 100,
+        "source_moment_index": 0,
+        "source_run_id": "run_7e25f779"
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "start_state": 91,
+        "success_rate": 0.333333
+      },
+      "task_id": 3,
+      "task_name": "start 91",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {
+        "derivation_reason": "start_from_episode_moment",
+        "derived_from": "start 91",
+        "episode_seed": null,
+        "run_id": "run_dda67038",
+        "seed": null,
+        "source_episode_id": 160,
+        "source_moment_index": 4,
+        "source_run_id": "run_dda67038"
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "start_state": 128,
+        "success_rate": 0.333333
+      },
+      "task_id": 4,
+      "task_name": "start 91 - From Episode 160 Step 4",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {
+        "derivation_reason": "start_from_episode_moment",
+        "derived_from": "Frozen Lake 12x12 - RQ1 Task 004",
+        "episode_seed": null,
+        "run_id": "run_7e25f779",
+        "seed": null,
+        "source_episode_id": 100,
+        "source_moment_index": 0,
+        "source_run_id": "run_7e25f779"
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "start_state": 88,
+        "success_rate": 0.333333
+      },
+      "task_id": 5,
+      "task_name": "start 88",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {
+        "derivation_reason": "start_from_episode_moment",
+        "derived_from": "start 88",
+        "episode_seed": null,
+        "run_id": "run_c2baf67b",
+        "seed": null,
+        "source_episode_id": 200,
+        "source_moment_index": 0,
+        "source_run_id": "run_c2baf67b"
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "start_state": 112,
+        "success_rate": 0.333333
+      },
+      "task_id": 6,
+      "task_name": "start 88 - From Episode 200 Step 0",
+      "termination_config": {}
+    },
+    {
+      "environment_id": "frozen_lake",
+      "metadata": {
+        "derivation_reason": "start_from_episode_moment",
+        "derived_from": "start 88 - From Episode 200 Step 0",
+        "episode_seed": null,
+        "run_id": "run_b1f6ff81",
+        "seed": null,
+        "source_episode_id": 200,
+        "source_moment_index": 0,
+        "source_run_id": "run_b1f6ff81"
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "task_config": {
+        "hole_probability": 0.4,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFHFFHFFHF",
+          "HFFFFFFFFHFF",
+          "HFHFHFFFFFFH",
+          "HHFHHFHFFHFF",
+          "HHHHHFHHHHFH",
+          "HHFHHFFHFHFH",
+          "HFFHFFFFFFHH",
+          "FHHFFHHFFFFH",
+          "HFFFFHHFFFFH",
+          "FFHHFFFFFHHF",
+          "HFHHFHFHFFFF",
+          "HFHHFFHFFFFG"
+        ],
+        "size": 12,
+        "start_state": 17,
+        "success_rate": 0.333333
+      },
+      "task_id": 7,
+      "task_name": "start 88 - From Episode 200 Step 0 - From Episode 200 Step 0",
+      "termination_config": {}
+    }
+  ],
+  "evaluation": {
+    "eval_episodes": 10,
+    "eval_seed": null,
+    "evaluation_env": 0,
+    "max_episode_length": 100
+  }
+}
