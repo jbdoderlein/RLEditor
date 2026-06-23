@@ -1061,10 +1061,15 @@ def test_project_is_saved_only_when_save_button_is_clicked(tmp_path) -> None:
     assert not project_store.project_path.exists()
 
     window.save_project_btn.click()
+    assert not window.save_project_progress.isHidden()
+    assert not window.save_project_btn.isEnabled()
+    _wait_for(lambda: project_store.project_path.exists())
+    _wait_for(lambda: window.save_project_btn.isEnabled())
     restored = project_store.load()
 
     assert restored is not None
     assert restored.task_workspace[0].name == "Unsaved Task Name"
+    assert window.save_project_progress.isHidden()
 
 
 def test_checkpoint_history_edge_selection_applies_config_to_training_tab() -> None:

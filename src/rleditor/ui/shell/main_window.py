@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QFileDialog,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -47,6 +48,28 @@ from rleditor.ui.views.training_monitor_view import TrainingMonitorView
 
 
 DEFAULT_MAX_STEPS_PER_EPISODE = 100
+
+
+class _ProjectSaveWorker(QObject):
+    progress = Signal(int, str)
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, store: ProjectStore, state: ProjectState) -> None:
+        super().__init__()
+        self._store = store
+        self._state = state
+
+    def run(self) -> None:
+        try:
+            self._store.save(self._state, progress_callback=self._emit_progress)
+        except (OSError, TypeError, ValueError) as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(str(self._store.project_path))
+
+    def _emit_progress(self, percent: int, message: str) -> None:
+        self.progress.emit(max(0, min(100, int(percent))), message)
 
 
 class MainWindow(QMainWindow):
@@ -86,6 +109,9 @@ class MainWindow(QMainWindow):
         self._status_busy_sources: set[str] = set()
         self._status_busy_frames = ("|", "/", "-", "\\")
         self._status_busy_frame_index = 0
+        self._project_save_thread: QThread | None = None
+        self._project_save_worker: _ProjectSaveWorker | None = None
+        self._project_save_active = False
 
         self.setWindowTitle("RL Debug Studio")
         self._build_ui()
@@ -144,6 +170,13 @@ class MainWindow(QMainWindow):
         self._status_busy_timer.setInterval(120)
         self._status_busy_timer.timeout.connect(self._advance_status_busy_indicator)
         self.statusBar().addWidget(self.status_busy_indicator)
+        self.save_project_progress = QProgressBar(self)
+        self.save_project_progress.setRange(0, 100)
+        self.save_project_progress.setValue(0)
+        self.save_project_progress.setFixedWidth(180)
+        self.save_project_progress.setTextVisible(True)
+        self.save_project_progress.setVisible(False)
+        self.statusBar().addPermanentWidget(self.save_project_progress)
         self.save_project_btn = QPushButton("Save Project", self)
         self.save_project_btn.setEnabled(self._project_store is not None)
         self.save_project_btn.setToolTip("Write the current task workspace and training history to disk.")
@@ -1628,26 +1661,67 @@ class MainWindow(QMainWindow):
         return dict(value) if isinstance(value, dict) else {}
 
     def _on_save_project_requested(self) -> None:
-        if self._save_project():
-            assert self._project_store is not None
-            self.statusBar().showMessage(f"Project saved: {self._project_store.project_path}")
-            self._log_interaction("project_saved", path=str(self._project_store.project_path))
-
-    def _save_project(self) -> bool:
+        if self._project_save_active:
+            self.statusBar().showMessage("Project save already in progress")
+            return
         if self._loading_project or self._project_store is None or self._current_plugin is None:
-            return False
+            return
 
+        project_path = self._project_store.project_path
         state = ProjectState(
             environment_id=self._current_plugin.plugin_id,
             task_workspace=deepcopy(self._task_workspace),
-            history=self._training_service.history_snapshot(),
+            history=self._training_service.history_snapshot(deep=False),
         )
-        try:
-            self._project_store.save(state)
-        except (OSError, TypeError, ValueError) as exc:
-            self.statusBar().showMessage(f"Could not save project state: {exc}")
-            return False
-        return True
+        store = ProjectStore(project_path)
+        thread = QThread(self)
+        worker = _ProjectSaveWorker(store, state)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_project_save_progress)
+        worker.finished.connect(self._on_project_save_finished)
+        worker.failed.connect(self._on_project_save_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(self._clear_project_save_thread)
+        thread.finished.connect(thread.deleteLater)
+
+        self._project_save_thread = thread
+        self._project_save_worker = worker
+        self._project_save_active = True
+        self.save_project_btn.setEnabled(False)
+        self.save_project_progress.setValue(0)
+        self.save_project_progress.setVisible(True)
+        self._set_status_busy("project_save", True)
+        self.statusBar().showMessage(f"Saving project: {project_path}")
+        thread.start()
+
+    def _on_project_save_progress(self, percent: int, message: str) -> None:
+        self.save_project_progress.setValue(percent)
+        self.statusBar().showMessage(message)
+
+    def _on_project_save_finished(self, path: str) -> None:
+        self._finish_project_save_ui()
+        self.statusBar().showMessage(f"Project saved: {path}")
+        self._log_interaction("project_saved", path=path)
+
+    def _on_project_save_failed(self, message: str) -> None:
+        self._finish_project_save_ui()
+        self.statusBar().showMessage(f"Could not save project state: {message}")
+
+    def _finish_project_save_ui(self) -> None:
+        self._project_save_active = False
+        self._set_status_busy("project_save", False)
+        self.save_project_progress.setVisible(False)
+        self.save_project_progress.setValue(0)
+        self.save_project_btn.setEnabled(self._project_store is not None)
+
+    def _clear_project_save_thread(self) -> None:
+        self._project_save_thread = None
+        self._project_save_worker = None
 
     def _log_interaction(self, event: str, **payload: object) -> None:
         if self._interaction_logger is None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 import json
@@ -66,17 +67,25 @@ class ProjectStore:
             history=history,
         )
 
-    def save(self, state: ProjectState) -> None:
+    def save(self, state: ProjectState, progress_callback: Callable[[int, str], None] | None = None) -> None:
+        def progress(percent: int, message: str) -> None:
+            if progress_callback is not None:
+                progress_callback(percent, message)
+
+        progress(5, "Preparing project save")
         self.project_path.parent.mkdir(parents=True, exist_ok=True)
+        progress(10, "Serializing task workspace")
         payload = {
             "schema_version": _SCHEMA_VERSION,
             "environment_id": state.environment_id,
             "task_workspace": [task.to_dict() for task in state.task_workspace],
-            "history": self._history_to_dict(state.history),
+            "history": self._history_to_dict(state.history, progress_callback=progress_callback),
         }
+        progress(90, "Writing project file")
         tmp_path = self.project_path.with_suffix(self.project_path.suffix + ".tmp")
         tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         tmp_path.replace(self.project_path)
+        progress(100, "Project save complete")
 
     def save_checkpoint_state(self, checkpoint_id: str, learner_state: dict[str, Any]) -> str | None:
         if not learner_state:
@@ -158,14 +167,40 @@ class ProjectStore:
             run_task_snapshots=run_task_snapshots,
         )
 
-    def _history_to_dict(self, history: TrainingHistorySnapshot) -> dict[str, Any]:
+    def _history_to_dict(
+        self,
+        history: TrainingHistorySnapshot,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> dict[str, Any]:
+        def progress(percent: int, message: str) -> None:
+            if progress_callback is not None:
+                progress_callback(percent, message)
+
+        progress(20, "Serializing training runs")
+        checkpoints = []
+        total_checkpoints = max(1, len(history.checkpoints))
+        for index, checkpoint in enumerate(history.checkpoints, start=1):
+            checkpoints.append(self._checkpoint_to_project_dict(checkpoint))
+            progress(
+                20 + int(index / total_checkpoints * 25),
+                f"Saving checkpoint state {index}/{len(history.checkpoints)}",
+            )
+
+        progress(50, "Serializing recorded episodes")
+        episodes_by_run: dict[str, list[dict[str, Any]]] = {}
+        total_runs = max(1, len(history.episodes_by_run))
+        for index, (run_id, traces) in enumerate(history.episodes_by_run.items(), start=1):
+            episodes_by_run[run_id] = [trace.to_dict() for trace in traces]
+            progress(
+                50 + int(index / total_runs * 30),
+                f"Serializing episode traces {index}/{len(history.episodes_by_run)}",
+            )
+
+        progress(85, "Serializing task snapshots")
         return {
             "runs": [run.to_dict() for run in history.runs],
-            "checkpoints": [self._checkpoint_to_project_dict(checkpoint) for checkpoint in history.checkpoints],
-            "episodes_by_run": {
-                run_id: [trace.to_dict() for trace in traces]
-                for run_id, traces in history.episodes_by_run.items()
-            },
+            "checkpoints": checkpoints,
+            "episodes_by_run": episodes_by_run,
             "run_task_snapshots": {
                 run_id: snapshot.to_dict()
                 for run_id, snapshot in history.run_task_snapshots.items()
@@ -200,4 +235,3 @@ def _task_from_dict(payload: dict[str, Any]) -> TaskDefinition:
     if any(key in payload for key in derived_keys):
         return DerivedTaskDefinition.from_dict(payload)
     return TaskDefinition.from_dict(payload)
-
