@@ -270,7 +270,7 @@ def main() -> None:
             mutated_map = mutate_map_distance(map_desc, dissimilarity, seed=seed)
             mutated_actual = _actual_hole_density(mutated_map)
             actual_dissimilarity = distance_map(map_desc, mutated_map)
-            mutated_task_name = f"Frozen Lake {GRID_SIZE}x{GRID_SIZE} - RQ1 Task {i:03d} - Mutated {j:03d}"
+            mutated_task_name = f"Task {i:01d} - M {int(dissimilarity*100):02d}%"    
             payload = _build_task_payload(mutated_task_name, mutated_map, mutated_actual)
             out = _OUTPUT_DIR / f"task_{i:03d}_{int(dissimilarity * 100):03d}.json"
             out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
