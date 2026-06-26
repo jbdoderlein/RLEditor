@@ -25,6 +25,7 @@ from rleditor.core.models import (
 )
 from rleditor.plugins.base import EnvironmentPlugin
 from rleditor.plugins.registry import PluginRegistry
+from rleditor.ui.app_icon import application_icon
 from rleditor.ui.shell.main_window import MainWindow
 
 
@@ -115,6 +116,29 @@ def _wait_for(predicate, *, timeout_seconds: float = 1.0) -> None:
             return
         time.sleep(0.001)
     assert predicate()
+
+
+def test_main_window_uses_project_icon() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+    )
+
+    assert not application_icon().isNull()
+    assert not window.windowIcon().isNull()
 
 
 def test_add_new_task_clones_first_workspace_task_state() -> None:
@@ -1524,15 +1548,94 @@ def test_multiple_evaluation_button_starts_training_on_checked_tasks_with_self_e
     assert [config.evaluation_policy["max_steps_per_episode"] for config in configs] == [55, 55]
     assert [config.evaluation_policy["seed"] for config in configs] == [42, 42]
     assert captured["kwargs"]["initial_checkpoint"] is checkpoint
+    assert captured["kwargs"]["initial_checkpoints"] is None
     assert captured["kwargs"]["run_in_background"] is True
-    assert "Batch training started on 2 task(s)" in window.statusBar().currentMessage()
+    assert "Batch training started on 2 run(s)" in window.statusBar().currentMessage()
     logged = [
         payload
         for event, payload in interaction_logger.records
         if event == "multiple_task_adaptation_started"
     ]
     assert logged[-1]["task_count"] == 2
+    assert logged[-1]["run_count"] == 2
+    assert logged[-1]["checkpoint_count"] == 1
     assert logged[-1]["training_episodes"] == 123
+
+
+def test_multiple_evaluation_repeats_batch_for_selected_checkpoints(monkeypatch) -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+    )
+    second_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Second Eval",
+        task_id="task_second_eval",
+        config={"difficulty": 2},
+    )
+    window._add_task_to_workspace(second_task, select=False)
+    for checkbox, _task_index in window.evaluation_view._multi_task_checkboxes:
+        checkbox.setChecked(True)
+    checkpoint_a = Checkpoint(
+        checkpoint_id="checkpoint_a",
+        label="Checkpoint A",
+        created_at="2026-06-26 10:00:00",
+        reason="test",
+        metadata={"learner_state": {"q_values": []}},
+    )
+    checkpoint_b = Checkpoint(
+        checkpoint_id="checkpoint_b",
+        label="Checkpoint B",
+        created_at="2026-06-26 10:01:00",
+        reason="test",
+        metadata={"learner_state": {"q_values": []}},
+    )
+    monkeypatch.setattr(window.history_view, "selected_checkpoints", lambda: [checkpoint_a, checkpoint_b])
+    monkeypatch.setattr(window.history_view, "start_from_scratch_selected", lambda: True)
+
+    captured: dict[str, object] = {}
+
+    def _start_many_with_configs(tasks, configs, **kwargs):
+        captured["tasks"] = tasks
+        captured["configs"] = configs
+        captured["kwargs"] = kwargs
+
+    training_service.start_many_with_configs = _start_many_with_configs  # type: ignore[method-assign]
+
+    window.evaluation_view.evaluate_multiple_button.click()
+
+    assert [task.name for task in captured["tasks"]] == [
+        "Dummy Main Task",
+        "Second Eval",
+        "Dummy Main Task",
+        "Second Eval",
+    ]
+    initial_checkpoints = captured["kwargs"]["initial_checkpoints"]
+    assert initial_checkpoints == [checkpoint_a, checkpoint_a, checkpoint_b, checkpoint_b]
+    assert captured["kwargs"]["initial_checkpoint"] is None
+    assert captured["kwargs"]["start_from_scratch"] is False
+    configs = captured["configs"]
+    assert [config.evaluation_policy["task"]["name"] for config in configs] == [
+        "Dummy Main Task",
+        "Second Eval",
+        "Dummy Main Task",
+        "Second Eval",
+    ]
+    assert "Batch training started on 4 run(s)" in window.statusBar().currentMessage()
 
 
 def test_checkpoint_history_delete_removes_selected_checkpoint_subtree() -> None:

@@ -38,6 +38,7 @@ from rleditor.core.models import (
 )
 from rleditor.plugins.base import EnvironmentPlugin
 from rleditor.plugins.registry import PluginRegistry
+from rleditor.ui.app_icon import application_icon
 from rleditor.ui.views.checkpoint_history_view import CheckpointHistoryView
 from rleditor.ui.views.evaluation_view import EvaluationView
 from rleditor.ui.views.episode_inspector_view import EpisodeInspectorView
@@ -84,6 +85,9 @@ class MainWindow(QMainWindow):
         interaction_logger: InteractionLogger | None = None,
     ) -> None:
         super().__init__()
+        icon = application_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self._registry = registry
         self._task_service = task_service
         self._training_service = training_service
@@ -875,13 +879,29 @@ class MainWindow(QMainWindow):
             config.evaluation_policy = policy
             configs.append(config)
 
-        selected_checkpoint = self.history_view.selected_checkpoint()
+        selected_checkpoints = self.history_view.selected_checkpoints()
+        selected_checkpoint = selected_checkpoints[0] if len(selected_checkpoints) == 1 else self.history_view.selected_checkpoint()
         start_from_scratch = self.history_view.start_from_scratch_selected()
+        launch_tasks = selected_tasks
+        launch_configs = configs
+        launch_initial_checkpoints: list[Checkpoint | None] | None = None
+        if len(selected_checkpoints) > 1:
+            launch_tasks = []
+            launch_configs = []
+            launch_initial_checkpoints = []
+            for checkpoint in selected_checkpoints:
+                for task, config in zip(selected_tasks, configs, strict=True):
+                    launch_tasks.append(task)
+                    launch_configs.append(RunConfig.from_dict(config.to_dict()))
+                    launch_initial_checkpoints.append(checkpoint)
+            start_from_scratch = False
+
         try:
             self._training_service.start_many_with_configs(
-                selected_tasks,
-                configs,
-                initial_checkpoint=selected_checkpoint,
+                launch_tasks,
+                launch_configs,
+                initial_checkpoint=selected_checkpoint if launch_initial_checkpoints is None else None,
+                initial_checkpoints=launch_initial_checkpoints,
                 start_from_scratch=start_from_scratch,
                 run_in_background=True,
             )
@@ -891,17 +911,26 @@ class MainWindow(QMainWindow):
 
         self._set_status_busy("training", True)
         self.episode_view.clear_episodes()
+        checkpoint_count = max(1, len(selected_checkpoints))
         self.statusBar().showMessage(
-            f"Batch training started on {len(selected_tasks)} task(s); each result will be evaluated on its own task"
+            f"Batch training started on {len(launch_tasks)} run(s) "
+            f"({len(selected_tasks)} task(s) x {checkpoint_count} checkpoint(s)); "
+            "each result will be evaluated on its own task"
         )
         self._log_interaction(
             "multiple_task_adaptation_started",
             task_count=len(selected_tasks),
+            run_count=len(launch_tasks),
+            checkpoint_count=checkpoint_count,
             training_episodes=training_episodes,
             max_steps_per_episode=DEFAULT_MAX_STEPS_PER_EPISODE,
             initial_checkpoint_id=(
                 selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
             ),
+            initial_checkpoint_ids=[
+                checkpoint.checkpoint_id
+                for checkpoint in selected_checkpoints
+            ],
             start_from_scratch=start_from_scratch,
             tasks=[
                 {

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=RL Debug Studio
+Comment=RL task and checkpoint editor
+Exec=rleditor
+Icon=rleditor
+Terminal=false
+Categories=Development;
+StartupWMClass=rleditor

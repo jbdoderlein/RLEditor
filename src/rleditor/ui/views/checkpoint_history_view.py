@@ -5,6 +5,7 @@ from html import escape
 import json
 from math import hypot
 from pathlib import Path
+import re
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
@@ -61,6 +62,7 @@ class _LineageNode:
     center: QPointF
     environment_id: str | None = None
     algorithm: str | None = None
+    success_rate: float | None = None
 
 
 @dataclass(slots=True)
@@ -1265,6 +1267,8 @@ class CheckpointGraphWidget(QWidget):
             painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, node.label)
             painter.setPen(QColor("#475569"))
             painter.drawText(sub_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, node.sublabel)
+            if node.kind == "checkpoint":
+                self._draw_success_indicator(painter, node)
 
     def _rebuild_layout(self) -> None:
         self._nodes = {}
@@ -1347,6 +1351,7 @@ class CheckpointGraphWidget(QWidget):
                 checkpoint=checkpoint,
                 rect=rect,
                 center=center,
+                success_rate=self._checkpoint_success_rate(checkpoint),
             )
 
         for checkpoint in sorted(self._snapshot.checkpoints, key=self._checkpoint_sort_key):
@@ -1407,12 +1412,44 @@ class CheckpointGraphWidget(QWidget):
         return hypot(point.x() - nearest_x, point.y() - nearest_y)
 
     def _checkpoint_title(self, checkpoint: Checkpoint) -> str:
-        title = checkpoint.label.strip() if checkpoint.label else ""
+        raw_title = checkpoint.label.strip() if checkpoint.label else ""
+        title = self._strip_checkpoint_number_prefix(raw_title)
+        if not title:
+            title = checkpoint.task_name or checkpoint.reason.replace("_", " ")
         if not title:
             title = checkpoint.checkpoint_id.replace("_", " ").title()
         if len(title) > 24:
             return title[:21] + "..."
         return title
+
+    def _strip_checkpoint_number_prefix(self, label: str) -> str:
+        return re.sub(
+            r"^checkpoint[\s_-]*\d+\s*(?:\|\s*)?",
+            "",
+            label,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+
+    def _checkpoint_success_rate(self, checkpoint: Checkpoint) -> float | None:
+        metrics = checkpoint.metadata.get("evaluation_metrics")
+        if not isinstance(metrics, dict) or "success_rate" not in metrics:
+            metrics = checkpoint.metadata.get("training_metrics")
+        if not isinstance(metrics, dict):
+            return None
+        try:
+            return float(metrics.get("success_rate"))
+        except (TypeError, ValueError):
+            return None
+
+    def _draw_success_indicator(self, painter: QPainter, node: _LineageNode) -> None:
+        success_rate = node.success_rate if node.success_rate is not None else 0.0
+        color = QColor("#16a34a") if success_rate >= 1.0 else QColor("#dc2626")
+        radius = 6.0
+        center = QPointF(node.rect.right() - 12.0, node.rect.bottom() - 12.0)
+        painter.setPen(QPen(QColor("#ffffff"), 2))
+        painter.setBrush(color)
+        painter.drawEllipse(center, radius, radius)
 
     def _checkpoint_sort_key(self, checkpoint: Checkpoint) -> tuple[str, str, int, int, str]:
         return (
@@ -1672,6 +1709,9 @@ class CheckpointHistoryView(QWidget):
         if node is None:
             return None
         return node.checkpoint
+
+    def selected_checkpoints(self) -> list[Checkpoint]:
+        return self._selected_training_report_checkpoints()
 
     def start_from_scratch_selected(self) -> bool:
         node_id = self._selected_start_node_id

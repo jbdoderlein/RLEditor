@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 from rleditor.application.persistence import ProjectStore
 from rleditor.application.services import TaskService, TrainingService
 from rleditor.plugins.registry import PluginRegistry, register_builtin_plugins
+from rleditor.ui.app_icon import application_icon
 from rleditor.ui.interaction_logging import InteractionLogger
 from rleditor.ui.shell.main_window import MainWindow
 from rleditor.ui.styles.theme import apply_theme
@@ -88,8 +89,13 @@ def run(argv: Sequence[str] | None = None) -> int:
             f"project is for '{project_state.environment_id}', but --env selected '{initial_plugin_id}'."
         )
 
+    QApplication.setApplicationName("RL Debug Studio")
+    QApplication.setApplicationDisplayName("RL Debug Studio")
+    QApplication.setDesktopFileName("rleditor")
     app = QApplication([sys.argv[0]])
-    app.setApplicationName("RL Debug Studio")
+    icon = application_icon()
+    if not icon.isNull():
+        app.setWindowIcon(icon)
     apply_theme(app)
     try:
         interaction_logger = (

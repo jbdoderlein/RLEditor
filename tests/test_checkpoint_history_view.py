@@ -133,6 +133,47 @@ def test_checkpoint_history_view_prefers_evaluation_metrics_and_lists_eval_episo
     assert view.episode_list.count() == 2
 
 
+def test_checkpoint_graph_omits_generic_checkpoint_prefix_and_tracks_success_rate() -> None:
+    _app()
+    view = CheckpointHistoryView()
+    successful_checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_007",
+        label="Checkpoint 007 | evaluation passed",
+        created_at="2026-04-28 11:30:00",
+        reason="run_finished",
+        run_id="run_success",
+        task_name="Successful Task",
+        step=50,
+        episode=3,
+        metadata={
+            "evaluation_metrics": {"success_rate": 1.0},
+            "training_metrics": {"success_rate": 0.0},
+        },
+    )
+    partial_checkpoint = Checkpoint(
+        checkpoint_id="checkpoint_008",
+        label="Checkpoint 008",
+        created_at="2026-04-28 11:31:00",
+        reason="run_finished",
+        run_id="run_partial",
+        task_name="Partial Task",
+        step=80,
+        episode=5,
+        metadata={"training_metrics": {"success_rate": 0.5}},
+    )
+
+    view.set_history(TrainingHistorySnapshot([], [successful_checkpoint, partial_checkpoint], {}, {}))
+
+    successful_node = view.graph_widget.node_for_id("checkpoint_007")
+    partial_node = view.graph_widget.node_for_id("checkpoint_008")
+    assert successful_node is not None
+    assert partial_node is not None
+    assert successful_node.label == "evaluation passed"
+    assert successful_node.success_rate == 1.0
+    assert partial_node.label == "Partial Task"
+    assert partial_node.success_rate == 0.5
+
+
 def test_checkpoint_history_view_edge_selection_shows_training_metrics_not_node_evaluation() -> None:
     _app()
     view = CheckpointHistoryView()

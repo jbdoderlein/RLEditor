@@ -483,6 +483,7 @@ class TrainingService(QObject):
         configs: list[RunConfig],
         *,
         initial_checkpoint: Checkpoint | None = None,
+        initial_checkpoints: list[Checkpoint | None] | None = None,
         start_from_scratch: bool = False,
         run_in_background: bool = False,
     ) -> None:
@@ -490,6 +491,9 @@ class TrainingService(QObject):
             return
         if len(tasks) != len(configs):
             msg = "Each training task must have a matching run config."
+            raise RuntimeError(msg)
+        if initial_checkpoints is not None and len(tasks) != len(initial_checkpoints):
+            msg = "Each training task must have a matching initial checkpoint."
             raise RuntimeError(msg)
         if self._has_live_runs():
             msg = "Training is already active; stop or finish the current run group before starting another."
@@ -509,10 +513,15 @@ class TrainingService(QObject):
         for index, task in enumerate(tasks):
             config = configs[index]
             run_id = f"run_{uuid4().hex[:8]}"
+            preferred_checkpoint = (
+                initial_checkpoints[index]
+                if initial_checkpoints is not None
+                else initial_checkpoint
+            )
             parent_checkpoint = self._resolve_initial_checkpoint(
                 task,
                 config,
-                preferred_checkpoint=initial_checkpoint,
+                preferred_checkpoint=preferred_checkpoint,
                 start_from_scratch=start_from_scratch,
             )
             task_snapshot = self._build_task_snapshot(task)
