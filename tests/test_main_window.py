@@ -141,6 +141,111 @@ def test_main_window_uses_project_icon() -> None:
     assert not window.windowIcon().isNull()
 
 
+def test_global_seed_applies_to_single_training_when_config_seed_is_empty() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+    )
+    window.global_seed_spin.setValue(123)
+    captured: dict[str, object] = {}
+
+    def _capture_start(task, config, **kwargs):
+        captured["task"] = task
+        captured["config"] = config
+        captured["kwargs"] = kwargs
+
+    training_service.start = _capture_start  # type: ignore[method-assign]
+
+    window._start_training(RunConfig(max_steps=10))
+
+    config = captured["config"]
+    assert isinstance(config, RunConfig)
+    assert config.seed == 123
+    assert config.metadata["global_seed"] == 123
+    assert config.metadata["global_seed_offset"] == 0
+
+
+def test_main_window_initial_seed_sets_global_seed_control() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=TrainingService(registry),
+        initial_plugin_id="dummy",
+        initial_seed=321,
+    )
+
+    assert window.global_seed_spin.value() == 321
+
+
+def test_global_seed_derives_parallel_training_seeds() -> None:
+    _app()
+    registry = PluginRegistry()
+    registry.register_environment(
+        EnvironmentPlugin(
+            plugin_id="dummy",
+            display_name="Dummy",
+            description="Test plugin",
+            backend=_DummyBackend(),
+            gui_extension=None,
+        )
+    )
+    training_service = TrainingService(registry)
+    window = MainWindow(
+        registry=registry,
+        task_service=TaskService(registry),
+        training_service=training_service,
+        initial_plugin_id="dummy",
+    )
+    second_task = TaskDefinition(
+        environment_id="dummy_env",
+        name="Second Task",
+        task_id="task_second",
+        config={"difficulty": 2},
+    )
+    window._add_task_to_workspace(second_task, select=False)
+    window.task_history_view.toggle_workspace_index_selection(1, emit_signal=True)
+    window.global_seed_spin.setValue(500)
+    captured: dict[str, object] = {}
+
+    def _capture_start_many_with_configs(tasks, configs, **kwargs):
+        captured["tasks"] = tasks
+        captured["configs"] = configs
+        captured["kwargs"] = kwargs
+
+    training_service.start_many_with_configs = _capture_start_many_with_configs  # type: ignore[method-assign]
+
+    window._start_training(RunConfig(max_steps=10))
+
+    configs = captured["configs"]
+    assert [config.seed for config in configs] == [500, 501]
+    assert [config.metadata["global_seed_offset"] for config in configs] == [0, 1]
+
+
 def test_add_new_task_clones_first_workspace_task_state() -> None:
     _app()
     registry = PluginRegistry()
@@ -675,6 +780,7 @@ def test_curriculum_import_adds_tasks_and_starts_first_step() -> None:
     assert len(window._imported_curriculum_queue) == 1
     queued_task, queued_config = window._imported_curriculum_queue[0]
     assert queued_task is window._task_workspace[-1]
+    assert queued_config.seed == 43
     assert queued_config.max_steps_per_episode == 100
     assert queued_config.epsilon == 1.0
     assert queued_config.hyperparameters["epsilon"] == 1.0
@@ -1902,17 +2008,19 @@ def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() 
 
     captured: dict[str, object] = {}
 
-    def _capture_start_many(tasks, config, **kwargs):
+    def _capture_start_many_with_configs(tasks, configs, **kwargs):
         captured["tasks"] = tasks
-        captured["config"] = config
+        captured["configs"] = configs
         captured["kwargs"] = kwargs
 
-    training_service.start_many = _capture_start_many  # type: ignore[method-assign]
+    training_service.start_many_with_configs = _capture_start_many_with_configs  # type: ignore[method-assign]
     window._start_training(RunConfig(max_steps=123))
 
     assert captured["tasks"] == [second_task, third_task]
-    assert isinstance(captured["config"], RunConfig)
-    config = captured["config"]
+    configs = captured["configs"]
+    assert len(configs) == 2
+    config = configs[0]
+    assert isinstance(config, RunConfig)
     assert config.evaluation_policy["task"]["task_id"] == "task_third"
     assert config.evaluation_policy["episode_count"] == 4
     assert config.evaluation_policy["max_steps_per_episode"] == 77
@@ -1926,7 +2034,7 @@ def test_start_training_uses_parallel_launch_when_multiple_tasks_are_selected() 
     assert training_started[-1]["mode"] == "parallel"
     assert training_started[-1]["algorithm"] == "q_learning"
     assert training_started[-1]["max_steps"] == 123
-    assert training_started[-1]["seed"] is None
+    assert training_started[-1]["seed"] == [None, None]
     assert training_started[-1]["tasks"] == [
         {"task_id": "task_second", "name": "Second Task", "environment_id": "dummy_env"},
         {"task_id": "task_third", "name": "Third Task", "environment_id": "dummy_env"},

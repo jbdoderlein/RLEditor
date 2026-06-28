@@ -9,6 +9,7 @@ from typing import Any, cast
 import gymnasium as gym
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
 
+from rleditor.application.randomness import next_seed
 from rleditor.core.models import TaskDefinition, TaskSnapshot
 
 FROZEN_LAKE_4X4_MAP = [
@@ -77,10 +78,14 @@ def _map_from_task_config(config: dict[str, object], *, fallback_size: int = 4) 
     return rows
 
 
-def _generate_random_map_desc(size: int, hole_probability: float) -> list[str]:
+def _generate_random_map_desc(size: int, hole_probability: float, *, seed: int | None = None) -> list[str]:
     if not 0.0 <= hole_probability < 1.0:
         raise ValueError("Frozen Lake hole_probability must be in [0, 1)")
-    return [str(row) for row in generate_random_map(size=size, p=1.0 - hole_probability)]
+    map_seed = next_seed() if seed is None else seed
+    return [
+        str(row)
+        for row in generate_random_map(size=size, p=1.0 - hole_probability, seed=map_seed)
+    ]
 
 
 def _parse_success_rate(value: object, *, fallback: float = DEFAULT_SUCCESS_RATE) -> float:

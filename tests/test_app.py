@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from rleditor.app import _resolve_initial_plugin_id
+from rleditor.app import _build_parser, _resolve_initial_plugin_id
 from rleditor.core.models import TaskDefinition
 from rleditor.plugins.base import EnvironmentPlugin
 from rleditor.plugins.registry import PluginRegistry
@@ -50,3 +50,18 @@ def test_resolve_initial_plugin_id_requires_explicit_choice_when_multiple_plugin
 
     with pytest.raises(ValueError, match="pass --env"):
         _resolve_initial_plugin_id(registry, None)
+
+
+def test_parser_accepts_seed_option() -> None:
+    parser = _build_parser(["dummy"])
+
+    args = parser.parse_args(["--env", "dummy", "--seed", "123"])
+
+    assert args.seed == 123
+
+
+def test_parser_rejects_negative_seed() -> None:
+    parser = _build_parser(["dummy"])
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--env", "dummy", "--seed", "-1"])

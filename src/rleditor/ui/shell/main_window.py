@@ -17,12 +17,19 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from rleditor.application.persistence import ProjectState, ProjectStore
+from rleditor.application.randomness import (
+    MAX_SEED,
+    derive_seed,
+    seed_process,
+    set_application_seed,
+)
 from rleditor.application.services import TaskService, TrainingService
 from rleditor.core.models import (
     Checkpoint,
@@ -83,6 +90,7 @@ class MainWindow(QMainWindow):
         initial_tasks: list[TaskDefinition] | None = None,
         project_store: ProjectStore | None = None,
         interaction_logger: InteractionLogger | None = None,
+        initial_seed: int | None = None,
     ) -> None:
         super().__init__()
         icon = application_icon()
@@ -119,6 +127,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("RL Debug Studio")
         self._build_ui()
+        if initial_seed is not None:
+            self.global_seed_spin.setValue(max(0, min(MAX_SEED, int(initial_seed))))
         self._wire_signals()
         self._load_initial_plugin(initial_plugin_id, initial_tasks=initial_tasks)
         self._loading_project = False
@@ -174,6 +184,17 @@ class MainWindow(QMainWindow):
         self._status_busy_timer.setInterval(120)
         self._status_busy_timer.timeout.connect(self._advance_status_busy_indicator)
         self.statusBar().addWidget(self.status_busy_indicator)
+        self.global_seed_spin = QSpinBox(self)
+        self.global_seed_spin.setRange(-1, MAX_SEED)
+        self.global_seed_spin.setSpecialValueText("Random")
+        self.global_seed_spin.setValue(-1)
+        self.global_seed_spin.setToolTip(
+            "Base seed for training, evaluation, curricula, and generated run seeds. "
+            "Explicit per-run seeds still take priority."
+        )
+        self.global_seed_spin.valueChanged.connect(self._on_global_seed_changed)
+        self.statusBar().addPermanentWidget(QLabel("Seed", self))
+        self.statusBar().addPermanentWidget(self.global_seed_spin)
         self.save_project_progress = QProgressBar(self)
         self.save_project_progress.setRange(0, 100)
         self.save_project_progress.setValue(0)
@@ -334,22 +355,29 @@ class MainWindow(QMainWindow):
         elif primary_task in selected_tasks:
             selected_tasks = [primary_task] + [task for task in selected_tasks if task is not primary_task]
 
+        self._apply_process_seed()
         config.evaluation_policy = self.evaluation_view.build_evaluation_policy()
         self.episode_view.clear_episodes()
         selected_checkpoint = self.history_view.selected_checkpoint()
         start_from_scratch = self.history_view.start_from_scratch_selected()
         try:
             if len(selected_tasks) > 1:
-                self._training_service.start_many(
+                configs = [
+                    self._config_with_global_seed(config, offset=index)
+                    for index, _task in enumerate(selected_tasks)
+                ]
+                self._training_service.start_many_with_configs(
                     selected_tasks,
-                    config,
+                    configs,
                     initial_checkpoint=selected_checkpoint,
                     start_from_scratch=start_from_scratch,
                     run_in_background=True,
                 )
                 self.statusBar().showMessage(f"Parallel training started on {len(selected_tasks)} tasks")
                 mode = "parallel"
+                logged_seed = [task_config.seed for task_config in configs]
             else:
+                config = self._config_with_global_seed(config)
                 self._training_service.start(
                     primary_task,
                     config,
@@ -359,6 +387,7 @@ class MainWindow(QMainWindow):
                 )
                 self.statusBar().showMessage("Training started")
                 mode = "single"
+                logged_seed = config.seed
             self._log_interaction(
                 "training_started",
                 mode=mode,
@@ -374,7 +403,8 @@ class MainWindow(QMainWindow):
                 max_steps=config.max_steps,
                 max_episodes=config.max_episodes,
                 max_steps_per_episode=config.max_steps_per_episode,
-                seed=config.seed,
+                seed=logged_seed,
+                global_seed=self._global_seed(),
                 initial_checkpoint_id=(
                     selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
                 ),
@@ -398,6 +428,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_training_edge_live_edit_requested(self, edge: object, edited_config: RunConfig) -> None:
+        self._apply_process_seed()
         if self._training_service.status in {TrainingStatus.RUNNING, TrainingStatus.PAUSED}:
             self.statusBar().showMessage("Cannot start live edit while training is running")
             return
@@ -503,6 +534,10 @@ class MainWindow(QMainWindow):
                 )
             )
 
+        replay_steps = [
+            (task, self._config_with_global_seed(config, offset=index))
+            for index, (task, config) in enumerate(replay_steps)
+        ]
         return source_checkpoint, replay_steps
 
     def _task_from_snapshot(self, snapshot: TaskSnapshot) -> TaskDefinition:
@@ -773,10 +808,12 @@ class MainWindow(QMainWindow):
         )
 
     def _on_checkpoint_evaluation_requested(self, checkpoint: Checkpoint) -> None:
+        self._apply_process_seed()
         policy = self.evaluation_view.build_evaluation_policy()
         if not policy:
             self.statusBar().showMessage("Cannot evaluate checkpoint: no evaluation task selected")
             return
+        policy = self._policy_with_global_seed(policy)
         try:
             self._set_status_busy("evaluation", True)
             evaluated_checkpoint = self._training_service.evaluate_checkpoint(
@@ -832,6 +869,8 @@ class MainWindow(QMainWindow):
                 "additional_episodes": additional_episodes,
             }
         )
+        self._apply_process_seed()
+        config = self._config_with_global_seed(config)
 
         task = self._task_from_snapshot(checkpoint.task_snapshot)
         self.episode_view.clear_episodes()
@@ -858,6 +897,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_multiple_evaluation_requested(self) -> None:
+        self._apply_process_seed()
         selected_tasks = self.evaluation_view.selected_evaluation_tasks()
         if not selected_tasks:
             self.statusBar().showMessage("Cannot train multiple tasks: no task selected")
@@ -896,6 +936,11 @@ class MainWindow(QMainWindow):
                     launch_initial_checkpoints.append(checkpoint)
             start_from_scratch = False
 
+        launch_configs = [
+            self._config_with_global_seed(config, offset=index)
+            for index, config in enumerate(launch_configs)
+        ]
+
         try:
             self._training_service.start_many_with_configs(
                 launch_tasks,
@@ -924,6 +969,8 @@ class MainWindow(QMainWindow):
             checkpoint_count=checkpoint_count,
             training_episodes=training_episodes,
             max_steps_per_episode=DEFAULT_MAX_STEPS_PER_EPISODE,
+            seeds=[config.seed for config in launch_configs],
+            global_seed=self._global_seed(),
             initial_checkpoint_id=(
                 selected_checkpoint.checkpoint_id if selected_checkpoint is not None else None
             ),
@@ -959,6 +1006,7 @@ class MainWindow(QMainWindow):
         self._begin_curriculum_import(payload)
 
     def _begin_curriculum_import(self, payload: object) -> bool:
+        self._apply_process_seed()
         try:
             imported_tasks, curriculum_steps = self._curriculum_from_import_payload(payload)
         except ValueError as exc:
@@ -1311,7 +1359,7 @@ class MainWindow(QMainWindow):
             raise ValueError("Curriculum must contain environments.")
 
         imported_tasks, tasks_by_ref = self._tasks_from_curriculum_environments(raw_environments)
-        global_seed = self._optional_int(curriculum.get("seed"))
+        global_seed = self._optional_int(curriculum.get("seed"), fallback=self._global_seed())
         evaluation_policy = self._evaluation_policy_from_curriculum_payload(payload, tasks_by_ref)
 
         curriculum_steps: list[tuple[TaskDefinition, RunConfig]] = []
@@ -1322,7 +1370,10 @@ class MainWindow(QMainWindow):
             task = tasks_by_ref.get(str(env_ref))
             if task is None:
                 raise ValueError(f"Curriculum step {index + 1} references unknown env_id: {env_ref}")
-            config = self._run_config_from_curriculum_step(raw_step, fallback_seed=global_seed)
+            step_seed = None if global_seed is None else self._derive_seed_from_base(global_seed, index)
+            config = self._run_config_from_curriculum_step(raw_step, fallback_seed=step_seed)
+            if config.seed is None and step_seed is not None:
+                config.seed = step_seed
             if evaluation_policy:
                 config.evaluation_policy = deepcopy(evaluation_policy)
             curriculum_steps.append((task, config))
@@ -1688,6 +1739,46 @@ class MainWindow(QMainWindow):
 
     def _dict_payload(self, value: object) -> dict[str, Any]:
         return dict(value) if isinstance(value, dict) else {}
+
+    def _global_seed(self) -> int | None:
+        seed = self.global_seed_spin.value()
+        return seed if seed >= 0 else None
+
+    def _on_global_seed_changed(self, value: int) -> None:
+        set_application_seed(value if value >= 0 else None)
+
+    def _derived_seed(self, offset: int = 0) -> int | None:
+        return derive_seed(offset)
+
+    def _derive_seed_from_base(self, base_seed: int, offset: int = 0) -> int:
+        resolved_seed = derive_seed(offset, base_seed=base_seed)
+        assert resolved_seed is not None
+        return resolved_seed
+
+    def _apply_process_seed(self) -> None:
+        set_application_seed(self._global_seed())
+        seed_process()
+
+    def _config_with_global_seed(self, config: RunConfig, *, offset: int = 0) -> RunConfig:
+        seeded_config = RunConfig.from_dict(config.to_dict())
+        if seeded_config.seed is None:
+            seed = self._derived_seed(offset)
+            if seed is not None:
+                seeded_config.seed = seed
+                seeded_config.metadata = dict(seeded_config.metadata)
+                seeded_config.metadata.setdefault("global_seed", self._global_seed())
+                seeded_config.metadata.setdefault("global_seed_offset", offset)
+        return seeded_config
+
+    def _policy_with_global_seed(self, policy: dict[str, object], *, offset: int = 0) -> dict[str, object]:
+        seeded_policy = deepcopy(policy)
+        if seeded_policy.get("seed") is None:
+            seed = self._derived_seed(offset)
+            if seed is not None:
+                seeded_policy["seed"] = seed
+                seeded_policy["global_seed"] = self._global_seed()
+                seeded_policy["global_seed_offset"] = offset
+        return seeded_policy
 
     def _on_save_project_requested(self) -> None:
         if self._project_save_active:

@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from PySide6.QtWidgets import QApplication
 
 from rleditor.application.persistence import ProjectStore
+from rleditor.application.randomness import MAX_SEED
 from rleditor.application.services import TaskService, TrainingService
 from rleditor.plugins.registry import PluginRegistry, register_builtin_plugins
 from rleditor.ui.app_icon import application_icon
@@ -39,7 +40,22 @@ def _build_parser(plugin_ids: list[str]) -> argparse.ArgumentParser:
         type=Path,
         help="Write UI interaction events to this JSON Lines log file.",
     )
+    parser.add_argument(
+        "--seed",
+        type=_parse_seed,
+        help=f"Base random seed for training, evaluation, curricula, and generated maps (0-{MAX_SEED}).",
+    )
     return parser
+
+
+def _parse_seed(value: str) -> int:
+    try:
+        seed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("seed must be an integer") from exc
+    if not 0 <= seed <= MAX_SEED:
+        raise argparse.ArgumentTypeError(f"seed must be between 0 and {MAX_SEED}")
+    return seed
 
 
 def _resolve_initial_plugin_id(
@@ -119,6 +135,7 @@ def run(argv: Sequence[str] | None = None) -> int:
         initial_tasks=None if project_state is None else project_state.task_workspace,
         project_store=project_store,
         interaction_logger=interaction_logger,
+        initial_seed=args.seed,
     )
     if interaction_logger is not None:
         interaction_logger.attach(app, root_widget=window, training_service=training_service)
@@ -126,6 +143,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             "application_started",
             environment_id=initial_plugin_id,
             project_path=str(project_store.project_path),
+            seed=args.seed,
         )
     window.resize(1280, 820)
     window.show()

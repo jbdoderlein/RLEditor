@@ -10,6 +10,7 @@ from gymnasium.spaces import Discrete
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QLayout, QSizePolicy
 
+from rleditor.application.randomness import set_application_seed
 from rleditor.core.models import EpisodeMoment, EpisodeStep, EpisodeTrace, TaskDefinition, TaskSnapshot
 from rleditor.plugins.builtin.frozen_lake import (
     FrozenLakeBackend,
@@ -191,6 +192,19 @@ def test_frozen_lake_random_map_hole_probability_zero_has_no_holes() -> None:
 def test_frozen_lake_random_map_rejects_impossible_hole_probability() -> None:
     with pytest.raises(ValueError, match="hole_probability"):
         _generate_random_map_desc(size=4, hole_probability=1.0)
+
+
+def test_frozen_lake_random_map_uses_application_seed_sequence() -> None:
+    try:
+        set_application_seed(123)
+        first = _generate_random_map_desc(size=8, hole_probability=0.25)
+        second = _generate_random_map_desc(size=8, hole_probability=0.25)
+
+        set_application_seed(123)
+        assert _generate_random_map_desc(size=8, hole_probability=0.25) == first
+        assert _generate_random_map_desc(size=8, hole_probability=0.25) == second
+    finally:
+        set_application_seed(None)
 
 
 def test_frozen_lake_config_helpers_normalize_sizes_maps_and_rewards() -> None:
