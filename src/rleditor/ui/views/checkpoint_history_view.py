@@ -1239,15 +1239,6 @@ class CheckpointGraphWidget(QWidget):
             painter.setPen(QPen(QColor("#0f766e") if selected else QColor("#94a3b8"), 3 if selected else 2))
             painter.drawLine(edge.source_point, edge.target_point)
 
-            label_rect = QRectF(
-                min(edge.source_point.x(), edge.target_point.x()) - 90,
-                (edge.source_point.y() + edge.target_point.y()) / 2.0 - 18,
-                180,
-                34,
-            )
-            painter.setPen(QColor("#0f172a") if selected else QColor("#475569"))
-            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, self._edge_label(edge))
-
         for node in self._nodes.values():
             selected = node.node_id in self._selected_node_ids
             if node.kind == "root":
@@ -1486,13 +1477,6 @@ class CheckpointGraphWidget(QWidget):
             for trace in traces
             if start_episode < trace.episode_id <= target_checkpoint.episode
         ]
-
-    def _edge_label(self, edge: _LineageEdge) -> str:
-        task_name = edge.task_snapshot.task_name if edge.task_snapshot is not None else "Training Run"
-        if len(task_name) > 26:
-            task_name = task_name[:23] + "..."
-        return task_name
-
 
 class CheckpointHistoryView(QWidget):
     inspect_episode_requested = Signal(object)
