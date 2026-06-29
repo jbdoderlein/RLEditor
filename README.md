@@ -2,6 +2,14 @@
 
 SpaceTimeRL is a PySide6 application for building, training, evaluating, and inspecting reinforcement-learning tasks and checkpoint histories. The current built-in environments focus on Frozen Lake and Blackjack, with Q-learning and Stable-Baselines3 backends.
 
+## Replication information
+
+The `eval` directory contains all curricula and tasks used to generate the figures and tables in the paper. To replicate the experiments, you can start tha app and use the import button to load baseline curricula (`eval/generated/baselines`) or author-created curricula (`eval/curricula_author1` and `eval/curricula_author2`).
+
+`eval/trainin_report_cumulative_reward.ipynb` is a Jupyter notebook that produces every figure and table in the paper, using the results from curricula and tasks in `eval/generated/baselines` and `eval/curricula_author1`/`eval/curricula_author2`.
+
+All experiments are run with fixed seed `121` to ensure reproducibility.
+
 ## Run
 
 Run the app:
@@ -13,10 +21,7 @@ uv run rleditor --env frozen_lake
 Useful options:
 
 ```bash
-uv run rleditor --list-envs
-uv run rleditor --env frozen_lake --seed 123
-uv run rleditor --env frozen_lake --project projects/my_project.json
-uv run rleditor --env frozen_lake --interaction-log interaction.jsonl
+uv run rleditor --env frozen_lake --seed 121
 ```
 
 Run tests:
