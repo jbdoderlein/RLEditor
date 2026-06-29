@@ -1,0 +1,45 @@
+{
+  "curriculum": {
+    "steps": [
+      {
+        "env_id": "0",
+        "algorithm": "q_learning"
+      }
+    ]
+  },
+  "environments": [
+    {
+      "environment_id": "frozen_lake",
+      "task_id": 0,
+      "task_name": "Task 1 - M 60%",
+      "metadata": {},
+      "task_config": {
+        "hole_probability": 0.097222,
+        "is_slippery": false,
+        "map_desc": [
+          "SFFFFFFFFFFF",
+          "FFFHFFFFFFFF",
+          "FFHFFFFFFFFF",
+          "FFFFFFFFFFHF",
+          "HFFFHFHFFFFF",
+          "FFFHFFFFFFFF",
+          "FFHFFFFFFFHF",
+          "FHFFFFFFFFHF",
+          "FFFFFFFFFFFF",
+          "FFFFFFHFFFFF",
+          "FHHFFFFFFFFF",
+          "FFFFFFFFFFFG"
+        ],
+        "size": 12,
+        "success_rate": 0.333333
+      },
+      "reward_config": {
+        "tile:F": 0.0,
+        "tile:G": 1.0,
+        "tile:H": 0.0,
+        "tile:S": 0.0
+      },
+      "termination_config": {}
+    }
+  ]
+}
