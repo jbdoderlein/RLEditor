@@ -145,6 +145,26 @@ def test_training_monitor_can_select_stable_baselines3_ppo() -> None:
     assert config.algorithm == "sb3_ppo"
 
 
+def test_training_monitor_uses_selected_task_algorithm_hint() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    view.set_algorithm_hint("sb3_ppo")
+    config = view.build_config()
+
+    assert config.algorithm == "sb3_ppo"
+
+
+def test_training_monitor_ignores_unknown_algorithm_hint() -> None:
+    _app()
+    view = TrainingMonitorView()
+
+    view.set_algorithm_hint("random")
+    config = view.build_config()
+
+    assert config.algorithm == "q_learning"
+
+
 def test_training_monitor_surfaces_classic_q_learning_metrics() -> None:
     _app()
     view = TrainingMonitorView()

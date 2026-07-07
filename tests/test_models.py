@@ -211,6 +211,38 @@ def test_episode_trace_roundtrip_preserves_task_snapshot_and_initial_observation
     assert restored.steps[1].terminated is True
 
 
+def test_episode_trace_roundtrip_preserves_continuous_actions() -> None:
+    trace = EpisodeTrace(
+        episode_id=4,
+        total_reward=0.5,
+        success=False,
+        steps=[
+            EpisodeStep(
+                t=0,
+                observation=[0.0, 1.0],
+                action=[0.25, -0.5],
+                reward=0.5,
+                next_observation=[0.1, 1.1],
+                terminated=False,
+            )
+        ],
+        moments=[
+            EpisodeMoment(
+                episode_id=4,
+                moment_index=1,
+                observation=[0.1, 1.1],
+                action_taken=[0.25, -0.5],
+                reward=0.5,
+            )
+        ],
+    )
+
+    restored = EpisodeTrace.from_dict(trace.to_dict())
+
+    assert restored.steps[0].action == [0.25, -0.5]
+    assert restored.moments[0].action_taken == [0.25, -0.5]
+
+
 def test_episode_moment_roundtrip_preserves_restorable_state() -> None:
     moment = EpisodeMoment(
         episode_id=4,

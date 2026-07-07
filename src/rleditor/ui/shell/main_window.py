@@ -265,6 +265,7 @@ class MainWindow(QMainWindow):
 
     def _on_task_changed(self, task: TaskDefinition) -> None:
         self._current_task = task
+        self.training_view.set_algorithm_hint(task.metadata.get("preferred_algorithm"))
         selected_workspace_index = self._workspace_index_for_task(task)
         self._refresh_task_history_view(
             selected_workspace_index=selected_workspace_index,
@@ -1076,6 +1077,7 @@ class MainWindow(QMainWindow):
         task = self._task_workspace[index]
         self._current_task = task
         self.task_editor_view.set_plugin_task(self._current_plugin, task)
+        self.training_view.set_algorithm_hint(task.metadata.get("preferred_algorithm"))
         if sync_task_history:
             self.task_history_view.set_primary_workspace_index(
                 index,

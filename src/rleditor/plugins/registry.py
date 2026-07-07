@@ -28,6 +28,8 @@ class PluginRegistry:
 def register_builtin_plugins(registry: PluginRegistry) -> None:
     from rleditor.plugins.builtin.blackjack import build_blackjack_plugin
     from rleditor.plugins.builtin.frozen_lake import build_frozen_lake_plugin
+    from rleditor.plugins.builtin.mujoco import build_mujoco_plugin
 
     registry.register_environment(build_blackjack_plugin())
     registry.register_environment(build_frozen_lake_plugin())
+    registry.register_environment(build_mujoco_plugin())

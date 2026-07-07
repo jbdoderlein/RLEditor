@@ -308,6 +308,7 @@ class TrainingMonitorView(QWidget):
         self._metric_cards: dict[str, MetricCard] = {}
         self._run_metric_panels: dict[str, RunMetricPanel] = {}
         self._breakpoint_rules: list[Breakpoint] = []
+        self._algorithm = "q_learning"
         self._formatters: dict[str, Callable[[float | None], str]] = {
             "episode_reward_mean": lambda value: _format_scalar(value),
             "success_rate": lambda value: _format_percent(value),
@@ -433,6 +434,15 @@ class TrainingMonitorView(QWidget):
                 for rule in self._breakpoint_rules
             ],
         )
+
+    def set_algorithm_hint(self, algorithm: object) -> None:
+        if algorithm is None:
+            return
+
+        algorithm_key = str(algorithm)
+        index = self.algorithm_combo.findData(algorithm_key)
+        if index >= 0:
+            self.algorithm_combo.setCurrentIndex(index)
 
     def set_config(self, config: RunConfig) -> None:
         algorithm_index = self.algorithm_combo.findData(config.algorithm)

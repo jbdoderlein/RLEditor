@@ -20,6 +20,11 @@ dependencies = [
     "tqdm>=4.68.3",
 ]
 
+[project.optional-dependencies]
+mujoco = [
+    "gymnasium[mujoco]>=1.2.3",
+]
+
 [project.scripts]
 rleditor = "rleditor.main:main"
 timeline = "rleditor.tools.interaction_timeline:main"
